@@ -1,17 +1,18 @@
+import spaces
 import gradio as gr
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
 from puzzle import generate_puzzle, _validate_phone
 
-print(f"Loading generator ({MODEL_ID})...")
-g_model, g_tokenizer = load_model()
-
-print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
-v_model, v_tokenizer = load_verifier()
+g_model, g_tokenizer = None, None
+v_model, v_tokenizer = None, None
 
 
+@spaces.GPU
 def run(phone_raw: str, domain1: str, domain2: str, domain3: str) -> str:
+    global g_model, g_tokenizer, v_model, v_tokenizer
+
     phone_raw = phone_raw.strip()
     domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
 
@@ -25,6 +26,13 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str) -> str:
         phone = _validate_phone(phone_raw)
     except ValueError as e:
         return f"Invalid phone number: {e}"
+
+    if g_model is None:
+        print(f"Loading generator ({MODEL_ID})...")
+        g_model, g_tokenizer = load_model()
+    if v_model is None:
+        print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
+        v_model, v_tokenizer = load_verifier()
 
     try:
         eq, puzzle, _, _ = generate_puzzle(
