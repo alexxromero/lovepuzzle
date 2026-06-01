@@ -11,37 +11,36 @@ v_model, v_tokenizer = None, None
 
 @spaces.GPU
 def run(phone_raw: str, domain1: str, domain2: str, domain3: str) -> str:
+    import traceback
     global g_model, g_tokenizer, v_model, v_tokenizer
-
-    phone_raw = phone_raw.strip()
-    domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
-
-    if not phone_raw:
-        return "Please enter a phone number."
-    domains = [d for d in [domain1, domain2, domain3] if d]
-    if len(domains) < 3:
-        return "Please enter all three domains."
-
     try:
-        phone = _validate_phone(phone_raw)
-    except ValueError as e:
-        return f"Invalid phone number: {e}"
+        phone_raw = phone_raw.strip()
+        domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
 
-    if g_model is None:
-        print(f"Loading generator ({MODEL_ID})...")
-        g_model, g_tokenizer = load_model()
-    if v_model is None:
-        print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
-        v_model, v_tokenizer = load_verifier()
+        if not phone_raw:
+            return "Please enter a phone number."
+        domains = [d for d in [domain1, domain2, domain3] if d]
+        if len(domains) < 3:
+            return "Please enter all three domains."
 
-    try:
+        try:
+            phone = _validate_phone(phone_raw)
+        except ValueError as e:
+            return f"Invalid phone number: {e}"
+
+        if g_model is None:
+            print(f"Loading generator ({MODEL_ID})...")
+            g_model, g_tokenizer = load_model()
+        if v_model is None:
+            print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
+            v_model, v_tokenizer = load_verifier()
+
         eq, puzzle, _, _ = generate_puzzle(
             phone, domains, g_model, g_tokenizer, v_model, v_tokenizer
         )
         return f"Equation: {eq['infix']}\n\n{puzzle}"
     except Exception as e:
-        import traceback
-        return f"Error: {e}\n\n{traceback.format_exc()}"
+        return f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
 
 
 with gr.Blocks(title="Love Puzzle") as demo:
