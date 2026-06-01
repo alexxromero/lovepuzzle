@@ -18,24 +18,15 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
         domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
 
         if not phone_raw:
-            return (
-                gr.update(), gr.update(),                        # pages unchanged
-                "Please enter a phone number.", "", 0, False,    # error in page1
-            )
+            return gr.update(), gr.update(), "Please enter a phone number.", "", "", 0, False
         domains = [d for d in [domain1, domain2, domain3] if d]
         if len(domains) < 3:
-            return (
-                gr.update(), gr.update(),
-                "Please enter all three domains.", "", 0, False,
-            )
+            return gr.update(), gr.update(), "Please enter all three domains.", "", "", 0, False
 
         try:
             phone = _validate_phone(phone_raw)
         except ValueError as e:
-            return (
-                gr.update(), gr.update(),
-                f"Invalid phone number: {e}", "", 0, False,
-            )
+            return gr.update(), gr.update(), f"Invalid phone number: {e}", "", "", 0, False
 
         if g_model is None:
             print(f"Loading generator ({MODEL_ID})...")
@@ -58,10 +49,7 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
         )
     except Exception as e:
         import traceback
-        return (
-            gr.update(), gr.update(),
-            f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}", "", 0, False,
-        )
+        return gr.update(), gr.update(), f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}", "", "", 0, False
 
 
 def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
