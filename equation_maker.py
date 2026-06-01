@@ -326,7 +326,7 @@ class EquationGenerator:
                 i += 1
 
             elif op == '*':
-                divisors = self._get_divisors(curr, self._int_max)
+                divisors = self._get_divisors(curr)
                 if divisors == [1]:  # prime number. Skip multiplication and try another operator
                     continue
 
