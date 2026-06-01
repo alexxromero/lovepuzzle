@@ -1,6 +1,4 @@
 accelerate>=1.13.0
-spaces
-gradio>=5.0.0
 phonenumbers>=8.13.0
 sentence-transformers>=3.0.0
 torch==2.11.0
