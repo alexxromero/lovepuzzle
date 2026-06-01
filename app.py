@@ -38,10 +38,10 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str) -> str:
         eq, puzzle, _, _ = generate_puzzle(
             phone, domains, g_model, g_tokenizer, v_model, v_tokenizer
         )
-    except ValueError as e:
-        return str(e)
-
-    return f"Equation: {eq['infix']}\n\n{puzzle}"
+        return f"Equation: {eq['infix']}\n\n{puzzle}"
+    except Exception as e:
+        import traceback
+        return f"Error: {e}\n\n{traceback.format_exc()}"
 
 
 with gr.Blocks(title="Love Puzzle") as demo:
