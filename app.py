@@ -1,9 +1,24 @@
+import random
 import spaces
 import gradio as gr
+from gradio.themes.utils import colors as _c
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
 from puzzle import generate_puzzle, _validate_phone
+
+_VIBRANT = [
+    _c.red, _c.pink, _c.fuchsia, _c.purple, _c.indigo, _c.blue,
+    _c.cyan, _c.teal, _c.emerald, _c.green, _c.amber, _c.orange,
+]
+_NEUTRALS = [_c.slate, _c.gray, _c.zinc, _c.neutral, _c.stone]
+
+_primary, _secondary = random.sample(_VIBRANT, 2)
+_theme = gr.themes.Soft(
+    primary_hue=_primary,
+    secondary_hue=_secondary,
+    neutral_hue=random.choice(_NEUTRALS),
+)
 
 g_model, g_tokenizer = None, None
 v_model, v_tokenizer = None, None
@@ -80,7 +95,7 @@ def start_over():
     )
 
 
-with gr.Blocks(title="Love Puzzle") as demo:
+with gr.Blocks(title="Love Puzzle", theme=_theme) as demo:
     equation_state = gr.State("")
     attempts_state = gr.State(0)
     verify_state = gr.State(False)
