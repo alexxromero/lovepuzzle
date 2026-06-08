@@ -1,123 +1,147 @@
 import spaces
-import streamlit as st
+import gradio as gr
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
 from puzzle import generate_puzzle, _validate_phone
 
-st.set_page_config(page_title="Love Puzzle", page_icon="💌")
-
-_g_model, _g_tokenizer = None, None
-_v_model, _v_tokenizer = None, None
+g_model, g_tokenizer = None, None
+v_model, v_tokenizer = None, None
 
 
 @spaces.GPU
-def run(phone_raw: str, domain1: str, domain2: str, domain3: str):
-    global _g_model, _g_tokenizer, _v_model, _v_tokenizer
-    phone = _validate_phone(phone_raw.strip())
-    domains = [d.strip() for d in [domain1, domain2, domain3]]
-    if _g_model is None:
-        _g_model, _g_tokenizer = load_model()
-    if _v_model is None:
-        _v_model, _v_tokenizer = load_verifier()
-    eq, puzzle, _, _ = generate_puzzle(
-        phone, domains, _g_model, _g_tokenizer, _v_model, _v_tokenizer
-    )
-    return puzzle, eq["infix"]
+def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
+    import traceback
+    global g_model, g_tokenizer, v_model, v_tokenizer
+    try:
+        phone_raw = phone_raw.strip()
+        domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
+
+        if not phone_raw:
+            return gr.update(), gr.update(), "Please enter a phone number.", "", "", 0, False
+        domains = [d for d in [domain1, domain2, domain3] if d]
+        if len(domains) < 3:
+            return gr.update(), gr.update(), "Please enter all three domains.", "", "", 0, False
+
+        try:
+            phone = _validate_phone(phone_raw)
+        except ValueError as e:
+            return gr.update(), gr.update(), f"Invalid phone number: {e}", "", "", 0, False
+
+        if g_model is None:
+            print(f"Loading generator ({MODEL_ID})...")
+            g_model, g_tokenizer = load_model()
+        if v_model is None:
+            print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
+            v_model, v_tokenizer = load_verifier()
+
+        eq, puzzle, _, _ = generate_puzzle(
+            phone, domains, g_model, g_tokenizer, v_model, v_tokenizer
+        )
+        return (
+            gr.update(visible=False),   # hide page 1
+            gr.update(visible=True),    # show page 2
+            "",                         # clear error
+            puzzle,
+            eq["infix"],
+            0,
+            verify,
+        )
+    except Exception as e:
+        import traceback
+        return gr.update(), gr.update(), f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}", "", "", 0, False
 
 
-for _k, _v in {
-    "page": 1, "puzzle": "", "equation": "", "attempts": 0,
-    "do_verify": False, "phone_raw": "", "result_msg": "",
-    "show_reveal": False, "equation_revealed": False,
-}.items():
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
-
-
-# ── Page 1 ───────────────────────────────────────────────────────────────────
-if st.session_state.page == 1:
-    st.title("💌 Love Puzzle")
-    st.caption("Generate a math puzzle from a phone number.")
-
-    phone_raw = st.text_input("Phone number", placeholder="e.g. (555) 867-5309")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        d1 = st.text_input("Domain 1", placeholder="e.g. sports")
-    with c2:
-        d2 = st.text_input("Domain 2", placeholder="e.g. history")
-    with c3:
-        d3 = st.text_input("Domain 3", placeholder="e.g. music")
-    do_verify = st.checkbox("Enable answer verification")
-
-    if st.button("Generate Puzzle ➜", type="primary"):
-        if not phone_raw.strip():
-            st.error("Please enter a phone number.")
-        elif not all([d1.strip(), d2.strip(), d3.strip()]):
-            st.error("Please enter all three domains.")
+def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
+    try:
+        phone = _validate_phone(phone_raw.strip())
+        guess_digits = guess.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+        if str(phone) == guess_digits:
+            return "Correct! 🎉", attempts, gr.update(visible=False), gr.update(visible=False)
         else:
-            try:
-                with st.spinner("Generating your puzzle…"):
-                    puzzle, equation = run(phone_raw, d1, d2, d3)
-                st.session_state.update({
-                    "page": 2, "puzzle": puzzle, "equation": equation,
-                    "do_verify": do_verify, "phone_raw": phone_raw,
-                    "attempts": 0, "result_msg": "",
-                    "show_reveal": False, "equation_revealed": False,
-                })
-                st.rerun()
-            except ValueError as e:
-                st.error(f"Invalid phone number: {e}")
-            except Exception as e:
-                import traceback
-                st.error(f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}")
+            new_attempts = attempts + 1
+            msg = f"Wrong! ({new_attempts}/3 attempts used)"
+            reveal_visible = new_attempts >= 3
+            return msg, new_attempts, gr.update(visible=reveal_visible), gr.update(visible=True)
+    except Exception as e:
+        return f"Error: {e}", attempts, gr.update(visible=False), gr.update(visible=True)
 
 
-# ── Page 2 ───────────────────────────────────────────────────────────────────
-elif st.session_state.page == 2:
-    st.title("💌 Your Puzzle")
-    st.text(st.session_state.puzzle)
-    st.divider()
+def reveal(equation: str):
+    return gr.update(value=f"Equation: {equation}", visible=True)
 
-    if st.session_state.do_verify:
-        st.subheader("Think you know the number?")
-        guess = st.text_input("Enter the phone number", placeholder="e.g. (555) 867-5309")
 
-        if st.button("Check Answer", type="primary"):
-            try:
-                phone = _validate_phone(st.session_state.phone_raw.strip())
-                guess_clean = (guess.strip()
-                               .replace(" ", "").replace("-", "")
-                               .replace("(", "").replace(")", ""))
-                if str(phone) == guess_clean:
-                    st.session_state.result_msg = "✅ Correct!"
-                else:
-                    st.session_state.attempts += 1
-                    st.session_state.result_msg = (
-                        f"❌ Wrong! ({st.session_state.attempts}/3 attempts used)"
-                    )
-                    if st.session_state.attempts >= 3:
-                        st.session_state.show_reveal = True
-            except Exception as e:
-                st.session_state.result_msg = f"Error: {e}"
-            st.rerun()
+def start_over():
+    return (
+        gr.update(visible=True),   # show page 1
+        gr.update(visible=False),  # hide page 2
+        "",                        # clear error
+        "", "", 0, False,          # reset state
+    )
 
-        if st.session_state.result_msg:
-            if st.session_state.result_msg.startswith("✅"):
-                st.success(st.session_state.result_msg)
-            else:
-                st.warning(st.session_state.result_msg)
 
-        if st.session_state.show_reveal:
-            if st.button("Reveal Equation"):
-                st.session_state.equation_revealed = True
-                st.rerun()
+with gr.Blocks(title="Love Puzzle") as demo:
+    equation_state = gr.State("")
+    attempts_state = gr.State(0)
+    verify_state = gr.State(False)
 
-        if st.session_state.equation_revealed:
-            st.info(f"Equation: {st.session_state.equation}")
+    # ── Page 1 ──────────────────────────────────────────────────────────────
+    with gr.Column(visible=True) as page1:
+        gr.Markdown("# 💌 Love Puzzle\nGenerate a puzzle from a phone number.")
+        phone_input = gr.Textbox(label="Phone number", placeholder="e.g. (555) 867-5309")
+        with gr.Row():
+            d1 = gr.Textbox(label="Domain 1", placeholder="e.g. sports")
+            d2 = gr.Textbox(label="Domain 2", placeholder="e.g. history")
+            d3 = gr.Textbox(label="Domain 3", placeholder="e.g. music")
+        verify_checkbox = gr.Checkbox(label="Enable answer verification on next page")
+        error_output = gr.Textbox(label="", interactive=False, visible=True, show_label=False)
+        generate_btn = gr.Button("Generate Puzzle ➜", variant="primary")
 
-        st.divider()
+    # ── Page 2 ──────────────────────────────────────────────────────────────
+    with gr.Column(visible=False) as page2:
+        gr.Markdown("# 💌 Your Puzzle")
+        puzzle_output = gr.Textbox(label="", lines=15, interactive=False, show_label=False)
 
-    if st.button("← Start Over"):
-        st.session_state.page = 1
-        st.rerun()
+        with gr.Column(visible=False) as verify_section:
+            gr.Markdown("### Think you know the number?")
+            guess_input = gr.Textbox(label="Enter the phone number", placeholder="e.g. (555) 867-5309")
+            check_btn = gr.Button("Check Answer", variant="primary")
+            result_output = gr.Textbox(label="", interactive=False, show_label=False)
+            reveal_btn = gr.Button("Reveal Equation", variant="secondary", visible=False)
+            equation_output = gr.Textbox(label="", interactive=False, show_label=False, visible=False)
+
+        back_btn = gr.Button("← Start Over", variant="secondary")
+
+    # ── Wiring ───────────────────────────────────────────────────────────────
+    def on_generate(phone_raw, d1, d2, d3, verify):
+        result = run(phone_raw, d1, d2, d3, verify)
+        # result: (page1_update, page2_update, error, puzzle, equation, attempts, verify)
+        page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val = result
+        verify_section_upd = gr.update(visible=verify_val)
+        return page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val, verify_section_upd
+
+    generate_btn.click(
+        fn=on_generate,
+        inputs=[phone_input, d1, d2, d3, verify_checkbox],
+        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state, verify_section],
+    )
+
+    check_btn.click(
+        fn=check_answer,
+        inputs=[guess_input, phone_input, attempts_state, equation_state],
+        outputs=[result_output, attempts_state, reveal_btn, result_output],
+    )
+
+    reveal_btn.click(
+        fn=reveal,
+        inputs=[equation_state],
+        outputs=[equation_output],
+    )
+
+    back_btn.click(
+        fn=start_over,
+        inputs=[],
+        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state],
+    )
+
+demo.launch()
