@@ -7,12 +7,30 @@ from verifier import load_verifier, verify, VERIFIER_MODEL_ID
 
 MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
 
+_SMALL_NUMBER_WORDS = {
+    1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five',
+    6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
+    11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen',
+    15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
+    19: 'nineteen', 20: 'twenty',
+}
+
+
+def _reveals_answer(clue: str, target: int) -> bool:
+    """Return True if the clue explicitly contains the target number."""
+    lower = clue.lower()
+    if re.search(rf'(?<!\d){re.escape(str(target))}(?!\d)', lower):
+        return True
+    word = _SMALL_NUMBER_WORDS.get(target)
+    return bool(word and re.search(rf'\b{word}\b', lower))
+
 def _system_prompt(num_clues: int) -> str:
     return (
         f"You are a trivia expert. When given a number and a domain, you generate "
         f"{num_clues} distinct, short (<20 words), fun, and factual clues that each connect "
         f"that number to the domain. Each clue must begin with 'The number of'. "
         f"The clues must be distinct — do not repeat the same fact. "
+        f"Do not include the number itself anywhere in the clue, either as a digit or spelled out. "
         f"Output only a numbered list, one clue per line, with no extra explanation.\n"
         f"Example format:\n1. The number of ...\n2. The number of ..."
     )
@@ -79,6 +97,9 @@ def find_best(model, tokenizer, clues, target_number):
     """
     valid = []
     for clue in clues:
+        if _reveals_answer(clue, target_number):
+            continue
+
         guessed, confidence = verify(model, tokenizer, clue)
 
         if guessed is None:
