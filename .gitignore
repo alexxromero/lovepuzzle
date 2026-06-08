@@ -16,5 +16,5 @@ results.csv
 # Claude memory
 .claude/
 
-# 
+# Claude md -- will share final version
 CLAUDE.md

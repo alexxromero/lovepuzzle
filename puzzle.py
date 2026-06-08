@@ -1,3 +1,4 @@
+import re
 import random
 import phonenumbers
 
@@ -15,6 +16,47 @@ N_CLUES = 5
 CLUE_SOURCE_GENERATED   = "generated"
 CLUE_SOURCE_HARDCODED   = "hardcoded"
 CLUE_SOURCE_ALTERNATIVE = "alternative"
+
+_STOPWORDS = {
+    'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for', 'with',
+    'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
+    'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+    'would', 'shall', 'should', 'may', 'might', 'can', 'could',
+    'number', 'that', 'this', 'which', 'who', 'their', 'they', 'it',
+    'its', 'by', 'from', 'as', 'into', 'during', 'before', 'after',
+    'each', 'every', 'all', 'some', 'no', 'not', 'only', 'so', 'than',
+    'just', 'about', 'any', 'how', 'what', 'when', 'where', 'up',
+}
+
+
+def _content_words(clue: str) -> frozenset:
+    tokens = re.sub(r"[^a-z0-9 ]", "", clue.lower()).split()
+    return frozenset(t for t in tokens if t not in _STOPWORDS and len(t) > 1)
+
+
+class ClueRegistry:
+    """Tracks clues used in a single puzzle and detects conceptual duplicates."""
+
+    _DUPLICATE_THRESHOLD = 0.6
+
+    def __init__(self):
+        self._entries: dict[str, frozenset] = {}  # clue_text -> content_words
+
+    def register(self, clue: str) -> None:
+        self._entries[clue] = _content_words(clue)
+
+    def is_duplicate(self, clue: str) -> bool:
+        words = _content_words(clue)
+        if not words:
+            return False
+        for stored_words in self._entries.values():
+            union = words | stored_words
+            if not union:
+                continue
+            if len(words & stored_words) / len(union) >= self._DUPLICATE_THRESHOLD:
+                return True
+        return False
+
 
 _OP_VERB = {
     '+':  'Add',
@@ -64,8 +106,11 @@ def _step_line(op, const, clue_text, diff):
         return f"{verb}."
     if clue_text:
         inline = clue_text[0].lower() + clue_text[1:]
-        correction = f" Plus {diff}." if diff and diff > 0 else (f" Minus {abs(diff)}." if diff else "")
-        return f"{verb} {inline}{correction}"
+        if diff:
+            base = inline.rstrip(". ")
+            suffix = f"plus {diff}" if diff > 0 else f"minus {abs(diff)}"
+            return f"{verb}: {base}, {suffix}."
+        return f"{verb} {inline}"
     return f"{verb} {const}"
 
 
@@ -90,6 +135,8 @@ def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tok
     eq = EquationGenerator(seed=seed).sample(phone)
     chain_seed, steps = expr_to_chain(eq['expr'])
 
+    registry = ClueRegistry()
+
     # First pass: generate clues via the model for every PREF_INT constant.
     # step_domains tracks which domain was chosen per step (None for skipped steps).
     steps_with_clues = []
@@ -103,6 +150,10 @@ def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tok
         domain = random.choice(domains)
         candidates = generate_clues(g_model, g_tokenizer, const, domain, N_CLUES)
         best, diff, _ = find_best(v_model, v_tokenizer, candidates, const)
+        if best is not None and registry.is_duplicate(best):
+            best = None
+        if best is not None:
+            registry.register(best)
         source = CLUE_SOURCE_GENERATED if best is not None else None
         steps_with_clues.append((op, const, best, diff, source))
         step_domains.append(domain)
@@ -114,7 +165,8 @@ def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tok
         if clue_text is not None or domain is None:
             continue
         hardcoded = get_hardcoded_clue(const, domain)
-        if hardcoded:
+        if hardcoded and not registry.is_duplicate(hardcoded):
+            registry.register(hardcoded)
             steps_with_clues[i] = (op, const, hardcoded, None, CLUE_SOURCE_HARDCODED)
 
     # Third pass: for PREF_INT steps still without a clue, try alternative representations.
@@ -138,7 +190,8 @@ def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tok
             clue = binary_clue(const)
             binary_used = True
 
-        if clue is not None:
+        if clue is not None and not registry.is_duplicate(clue):
+            registry.register(clue)
             steps_with_clues[i] = (op, const, clue, None, CLUE_SOURCE_ALTERNATIVE)
 
     n_valid = sum(1 for _, _, clue_text, _, _ in steps_with_clues if clue_text is not None)
