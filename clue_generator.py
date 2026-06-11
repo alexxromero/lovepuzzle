@@ -40,8 +40,8 @@ def load_model():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_ID,
-        dtype=torch.bfloat16,
-        device_map="auto",
+        dtype=torch.float32,
+        device_map="cpu",
     )
     model.eval()
     return model, tokenizer

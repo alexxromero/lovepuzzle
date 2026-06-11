@@ -18,6 +18,9 @@ _theme = gr.themes.Soft(
     primary_hue=_primary,
     secondary_hue=_secondary,
     neutral_hue=random.choice(_NEUTRALS),
+).set(
+    background_fill_primary="*primary_50",
+    background_fill_secondary="*secondary_50",
 )
 
 g_model, g_tokenizer = None, None
@@ -95,7 +98,7 @@ def start_over():
     )
 
 
-with gr.Blocks(title="Love Puzzle", theme=_theme) as demo:
+with gr.Blocks(title="Love Puzzle") as demo:
     equation_state = gr.State("")
     attempts_state = gr.State(0)
     verify_state = gr.State(False)
@@ -159,4 +162,4 @@ with gr.Blocks(title="Love Puzzle", theme=_theme) as demo:
         outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state],
     )
 
-demo.launch()
+demo.launch(theme=_theme)
