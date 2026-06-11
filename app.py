@@ -98,7 +98,7 @@ def start_over():
     )
 
 
-with gr.Blocks(title="Love Puzzle") as demo:
+with gr.Blocks(title="Love Puzzle", theme=_theme) as demo:
     equation_state = gr.State("")
     attempts_state = gr.State(0)
     verify_state = gr.State(False)
@@ -162,4 +162,4 @@ with gr.Blocks(title="Love Puzzle") as demo:
         outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state],
     )
 
-demo.launch(theme=_theme)
+demo.launch()
