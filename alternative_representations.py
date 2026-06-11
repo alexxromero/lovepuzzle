@@ -44,13 +44,14 @@ PRIME_ORDINALS = {
 # Duplicate value 1 maps to its first occurrence (1st).
 # ---------------------------------------------------------------------------
 FIBONACCI_ORDINALS = {
-     1: "1st",
-     2: "3rd",
-     3: "4th",
-     5: "5th",
-     8: "6th",
-    13: "7th",
-    21: "8th",
+     0: 0,
+     1: 1,  # and 2
+     2: 3,
+     3: 4,
+     5: 5,
+     8: 6,
+    13: 7,
+    21: 8,
 }
 
 # ---------------------------------------------------------------------------
@@ -105,15 +106,16 @@ def prime_ordinal_clue(n: int) -> str | None:
         return None
     return f"the {ordinal} prime number"
 
+def sub(n):
+    return str(n).translate(str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉"))
 
 def fibonacci_ordinal_clue(n: int) -> str | None:
     """Return a clue string if n is a Fibonacci number ≤ 100, else None.
-    Example: 13 → 'the 7th Fibonacci number'
     """
     ordinal = FIBONACCI_ORDINALS.get(n)
     if ordinal is None:
         return None
-    return f"the {ordinal} Fibonacci number"
+    return f"the F{sub(ordinal)} Fibonacci number (F{sub(0)}=0, F{sub(1)}=1, ...)"
 
 
 def spanish_clue(n: int) -> str | None:
