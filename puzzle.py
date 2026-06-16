@@ -2,7 +2,7 @@ import re
 import random
 import phonenumbers
 
-from equation_maker import EquationGenerator, expr_to_chain, PREF_INTS
+from equation_maker import EquationGenerator, PREF_INTS
 from clue_generator import load_model, generate_clues, find_best, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
 from hardcoded_clues import get_hardcoded_clue
@@ -11,13 +11,25 @@ from alternative_representations import (
     fibonacci_ordinal_clue, spanish_clue,
 )
 
-N_CLUES = 5
+N_CLUES = 5  # number of clues to ask the generator LLM for
+MAX_RETRIES = 3  # number of tries for the whole puzzle generation
 
 CLUE_SOURCE_GENERATED   = "generated"
 CLUE_SOURCE_HARDCODED   = "hardcoded"
 CLUE_SOURCE_ALTERNATIVE = "alternative"
 
-_STOPWORDS = {
+OP_VERB = {
+    '+':  'Add',
+    '-':  'Subtract',
+    '*':  'Multiply by',
+    '/':  'Divide by',
+    'e2': 'Square it',
+    'e3': 'Cube it',
+    'e4': 'Raise it to the 4th power',
+    'e5': 'Raise it to the 5th power',
+}
+
+STOPWORDS = {
     'a', 'an', 'the', 'of', 'in', 'on', 'at', 'to', 'for', 'with',
     'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
     'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
@@ -29,47 +41,38 @@ _STOPWORDS = {
 }
 
 
-def _content_words(clue: str) -> frozenset:
+def _content_words(clue):
     tokens = re.sub(r"[^a-z0-9 ]", "", clue.lower()).split()
-    return frozenset(t for t in tokens if t not in _STOPWORDS and len(t) > 1)
-
+    return frozenset(t for t in tokens if t not in STOPWORDS and len(t) > 1)
 
 class ClueRegistry:
-    """Tracks clues used in a single puzzle and detects conceptual duplicates."""
+    """Tracks clues used in a puzzle to avoid duplicates."""
 
-    _DUPLICATE_THRESHOLD = 0.6
+    DUPLICATE_THRESHOLD = 0.6
 
     def __init__(self):
-        self._entries: dict[str, frozenset] = {}  # clue_text -> content_words
+        # for each string, we save the set of relevant content words
+        self._entries: dict[str, frozenset] = {}
 
-    def register(self, clue: str) -> None:
+    def register(self, clue):
         self._entries[clue] = _content_words(clue)
 
-    def is_duplicate(self, clue: str) -> bool:
-        words = _content_words(clue)
-        if not words:
+    def is_duplicate(self, clue):
+        # use Jaccard similarity to compare the concepts between clues
+        new_concept = _content_words(clue)
+        if not new_concept:
             return False
-        for stored_words in self._entries.values():
-            union = words | stored_words
+        for seen_concept in self._entries.values():
+            union = new_concept | seen_concept
             if not union:
                 continue
-            if len(words & stored_words) / len(union) >= self._DUPLICATE_THRESHOLD:
+            if len(new_concept & seen_concept) / len(union) >= self.DUPLICATE_THRESHOLD:
                 return True
         return False
 
 
-_OP_VERB = {
-    '+':  'Add',
-    '-':  'Subtract',
-    '*':  'Multiply by',
-    '/':  'Divide by',
-    'e2': 'Square it',
-    'e3': 'Cube it',
-    'e4': 'Raise it to the 4th power',
-    'e5': 'Raise it to the 5th power',
-}
-
-def _validate_phone(raw: str) -> int:
+def validate_phone_number(raw):
+    # we use Google's phone number library for validating the phone numbers
     try:
         parsed = phonenumbers.parse(raw, "US")
     except phonenumbers.NumberParseException as e:
@@ -88,127 +91,132 @@ def _validate_phone(raw: str) -> int:
 
 def get_inputs():
     raw = input("Enter a phone number: ").strip()
-    phone = _validate_phone(raw)
+    phone = validate_phone_number(raw)
 
-    print("Enter three domains (e.g. sports, history, music):")
+    print("Enter three interests (e.g. sports, history, music):")
     domains = []
     for i in range(1, 4):
-        domain = input(f"  Domain {i}: ").strip()
+        domain = input(f"  Interest {i}: ").strip()
         domains.append(domain)
 
     return phone, domains
 
 
-def _step_line(op, const, clue_text, diff):
-    """Format one puzzle step into a sentence."""
-    verb = _OP_VERB[op]
+def narrate_step(op, val, clue, correction):
+    """Turn a puzzle step into a sentence."""
+    verb = OP_VERB[op]
     if op in ('e2', 'e3', 'e4', 'e5'):
         return f"{verb}."
-    if clue_text:
-        inline = clue_text[0].lower() + clue_text[1:]
-        if diff:
+    if clue:
+        inline = clue[0].lower() + clue[1:]
+        if correction:
             base = inline.rstrip(". ")
-            suffix = f"plus {diff}" if diff > 0 else f"minus {abs(diff)}"
+            suffix = f"plus {correction}" if correction > 0 else f"minus {abs(correction)}"
             return f"{verb}: {base}, {suffix}."
         return f"{verb} {inline}"
-    return f"{verb} {const}"
+    return f"{verb} {val}"
 
 
-def build_puzzle_text(seed, steps_with_clues):
-    """
-    steps_with_clues: list of (op, const, clue_text, diff, source)
-    Returns the full puzzle as a string.
-    """
+def build_puzzle_text(seed, clues_info):
+    """Returns the full narrated puzzle as a string."""
     lines = [f"1. Start with {seed}."]
-    for i, (op, const, clue_text, diff, _source) in enumerate(steps_with_clues, start=2):
-        lines.append(f"{i}. {_step_line(op, const, clue_text, diff)}")
+    i = 2
+    for (op, val, clue, correction, _, _) in clues_info:
+        lines.append(f"{i}. {narrate_step(op, val, clue, correction)}")
+        i += 1
     return "\n".join(lines)
-
-
-MAX_RETRIES = 3
 
 
 def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer):
     """Try to build a puzzle for the given phone number and seed.
     Returns (eq, puzzle, n_valid_clues).
     """
-    eq = EquationGenerator(seed=seed).sample(phone)
-    chain_seed, steps = expr_to_chain(eq['expr'])
+    equation_chain = EquationGenerator(seed=seed).sample(phone)
+    seed_op, seed_val = equation_chain[0]
+    assert(seed_op == "seed")
 
-    registry = ClueRegistry()
+    registry = ClueRegistry()  # track clues to avoid duplicates
 
-    # First pass: generate clues via the model for every PREF_INT constant.
-    # step_domains tracks which domain was chosen per step (None for skipped steps).
-    steps_with_clues = []
-    step_domains = []
-    for op, const in steps:
-        if op in ('e2', 'e3', 'e4', 'e5') or const not in PREF_INTS:
-            steps_with_clues.append((op, const, None, None, None))
-            step_domains.append(None)
+    clues_info = []  #(operator, value, best clue, correction, domain, clue source)
+
+    # First pass: LMM clue generator
+    for op, val in equation_chain[1:]:
+        if op in ('e2', 'e3', 'e4', 'e5') or val not in PREF_INTS:
+            # no clue generation
+            clues_info.append((op, val, None, None, None, None))
             continue
 
         domain = random.choice(domains)
-        candidates = generate_clues(g_model, g_tokenizer, const, domain, N_CLUES)
-        best, diff, _ = find_best(v_model, v_tokenizer, candidates, const)
+        candidates = generate_clues(g_model, g_tokenizer, val, domain, N_CLUES)
+        best, diff, _ = find_best(v_model, v_tokenizer, candidates, val)
+        # TODO: don't throw away the rest of the generated clues. If the best clue is duplicate, move on to the next
         if best is not None and registry.is_duplicate(best):
             best = None
         if best is not None:
             registry.register(best)
         source = CLUE_SOURCE_GENERATED if best is not None else None
-        steps_with_clues.append((op, const, best, diff, source))
-        step_domains.append(domain)
-
-    # Second pass: for PREF_INT steps still without a clue, try the hardcoded lookup.
-    for i, ((op, const, clue_text, diff, source), domain) in enumerate(
-        zip(steps_with_clues, step_domains)
-    ):
-        if clue_text is not None or domain is None:
+        clues_info.append((op, val, best, diff, domain, source))
+        
+    # Second pass: for values without a clue, look up if there are any hard-coded clues
+    # that we can use
+    for i, (op, val, clue_text, _, domain, _) in enumerate(clues_info):
+        if clue_text is not None:  # already has a clue
             continue
-        hardcoded = get_hardcoded_clue(const, domain)
+        if domain is None:  # likely not a fact-rich number
+            continue
+        hardcoded = get_hardcoded_clue(val, domain)
         if hardcoded and not registry.is_duplicate(hardcoded):
             registry.register(hardcoded)
-            steps_with_clues[i] = (op, const, hardcoded, None, CLUE_SOURCE_HARDCODED)
+            clues_info[i] = (op, val, hardcoded, None, "misc", CLUE_SOURCE_HARDCODED)
 
-    # Third pass: for PREF_INT steps still without a clue, try alternative representations.
+    # Third pass: try alternative representations.
     # Binary is domain-gated (tech/math only) and limited to one use per puzzle.
     _BINARY_DOMAINS = {'math', 'mathematics', 'science', 'computers', 'computing',
                        'technology', 'engineering', 'physics', 'programming'}
     binary_used = False
-    for i, (op, const, clue_text, diff, source) in enumerate(steps_with_clues):
-        if clue_text is not None or const is None:
+    for i, (op, val, clue_text, _, domain, _) in enumerate(clues_info):
+        if clue_text is not None or val is None:
             continue
-        domain = step_domains[i]
 
-        clue = prime_ordinal_clue(const)
+        clue = prime_ordinal_clue(val)
+        if clue is not None:
+            domain = "prime_rep"
         if clue is None:
-            clue = fibonacci_ordinal_clue(const)
+            clue = fibonacci_ordinal_clue(val)
+            if clue is not None:
+                domain = "fibonacci_rep"
         if clue is None:
-            clue = roman_clue(const)
+            clue = roman_clue(val)
+            if clue is not None:
+                domain = "roman_rep"
         if clue is None:
-            clue = spanish_clue(const)
+            clue = spanish_clue(val)
+            if clue is not None:
+                domain = "spanish_rep"
         if clue is None and not binary_used and domain and domain.lower().strip() in _BINARY_DOMAINS:
-            clue = binary_clue(const)
+            clue = binary_clue(val)
+            domain = "binary_rep"
             binary_used = True
 
         if clue is not None and not registry.is_duplicate(clue):
             registry.register(clue)
-            steps_with_clues[i] = (op, const, clue, None, CLUE_SOURCE_ALTERNATIVE)
+            clues_info[i] = (op, val, clue, None, domain, CLUE_SOURCE_ALTERNATIVE)
 
-    n_valid = sum(1 for _, _, clue_text, _, _ in steps_with_clues if clue_text is not None)
-    puzzle = build_puzzle_text(chain_seed, steps_with_clues)
-    return eq, puzzle, n_valid, steps_with_clues, step_domains
+    n_valid = sum(1 for _, _, clue, _, _, _ in clues_info if clue is not None)
+    puzzle = build_puzzle_text(seed_val, clues_info)
+    return equation_chain, puzzle, n_valid, clues_info
 
 
 def generate_puzzle(phone, domains, g_model, g_tokenizer, v_model, v_tokenizer):
     for attempt in range(MAX_RETRIES):
-        seed = random.randint(0, 10_000)
-        eq, puzzle, n_valid, steps_with_clues, step_domains = _try_build_puzzle(
+        seed = random.randint(0, 10000)
+        eq, puzzle, n_valid, clues_info = _try_build_puzzle(
             phone, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer
         )
         if n_valid > 0:
-            print(f"\nEquation : {eq['infix']}\n")
+            print(f"\nEquation : {eq}\n")
             print(puzzle)
-            return eq, puzzle, steps_with_clues, step_domains
+            return eq, puzzle, clues_info
         print(f"Attempt {attempt + 1}: no valid clues found, retrying...")
 
     raise ValueError(

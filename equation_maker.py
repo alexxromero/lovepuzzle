@@ -1,7 +1,5 @@
 import random 
 import math
-from dataclasses import dataclass
-from typing import Union, List
 
 # ------------------------------------------------------------------------- #
 # ----- FACT-RICH INTEGERS ------------------------------------------------ #
@@ -25,24 +23,7 @@ PREF_INTS = {
 }
 
 pref_ints = list(PREF_INTS.keys())
-# ------------------------------------------------------------------------- #
-
-@dataclass(frozen=True)
-class Const:  # Constant
-    value: int
-
-@dataclass(frozen=True)
-class BinaryOp:  # Binary Operators
-    op: str  # {'+', '-', '*', '/'}
-    left: "Expr"
-    right: "Expr"
-
-@dataclass(frozen=True)
-class UnaryOp:  # Unary Operators (e.g., exponentiation)
-    op: str  # {'e2', 'e3', 'e4', 'e5'}
-    operand: "Expr"
-
-Expr = Union[Const, BinaryOp, UnaryOp]
+# ------------------------------------------------------------------------- 
 
 def _count_digits(y):
     if y == 0:
@@ -79,129 +60,13 @@ def find_closest_root(n):
             closest_exp = exp
     return closest_exp, closest_root, min_dist
 
-def eval_expr(e):
-    """
-    Evaluate an expression tree and return the integer result.
-    """
-    # Evaluating constants
-    if isinstance(e, Const):
-        return e.value
-    
-    # Evaluating unary operations
-    if isinstance(e, UnaryOp):
-        val = eval_expr(e.operand)
-        if e.op == 'e2':
-            return val * val
-        elif e.op == 'e3':
-            return val * val * val
-        elif e.op == 'e4':
-            return val ** 4
-        elif e.op == 'e5':
-            return val ** 5
-        else:
-            raise ValueError(f"Unknown unary operator: {e.op}")
-    
-    # Evaluating binary operations
-    l = eval_expr(e.left)
-    r = eval_expr(e.right)
-    if e.op == '+':
-        return l + r
-    elif e.op == '-':
-        return l - r
-    elif e.op == '*':
-        return l * r
-    elif e.op == '/':
-        if r == 0:
-            raise ZeroDivisionError("Division by zero")
-        if l % r != 0:
-            raise ValueError("Non-integer division")
-        return l // r
-    else:
-        raise ValueError(f"Unknown operator: {e.op}")
-
-
-def to_infix(e):
-    """
-    Convert expression to infix notation string.
-    That's the usual mathematical notation: (a + b) * c, etc.
-    """
-    if isinstance(e, Const):
-        return str(e.value)
-    
-    if isinstance(e, UnaryOp):
-        inner = to_infix(e.operand)
-        if e.op == 'e2':
-            return f"({inner}^{2})"
-        if e.op == 'e3':
-            return f"({inner}^{3})"
-        if e.op == 'e4':
-            return f"({inner}^{4})"
-        if e.op == 'e5':
-            return f"({inner}^{5})"
-    return f"({to_infix(e.left)} {e.op} {to_infix(e.right)})"
-
-def to_prefix_tokens(e, const_token="CONST", add_eos=True):
-    """
-    Convert expression to (tokens, constants) format.
-    The tokens are in prefix notation with 'CONST' as placeholders for constants.
-    In prefix notation, the operator precedes its operands, e.g. + 3 4 instead of 3 + 4.
-    """
-    tokens = []
-    constants = []
-
-    def rec(e):
-        if isinstance(e, Const):
-            tokens.append(const_token)
-            constants.append(e.value)
-            return 
-        if isinstance(e, UnaryOp):
-            tokens.append(e.op)
-            rec(e.operand)
-            return
-        tokens.append(e.op)
-        rec(e.left)
-        rec(e.right)
-
-    rec(e)
-    if add_eos:
-        tokens.append("EOS")
-    return tokens, constants
-
-def expr_to_chain(e):
-    """Convert an expression tree into a (seed_value, steps) chain.
-    Useful when narrating the steps of the equation.
-    """
-    steps = []
-    node = e
-    def unwind(x):
-        nonlocal steps 
-        if isinstance(x, Const):
-            return x.value
-        if isinstance(x, UnaryOp):
-            v = unwind(x.operand)
-            steps.append((x.op, None))
-            return v
-        
-        l = unwind(x.left)
-        if not isinstance(x.right, Const):
-            cval = eval_expr(x.right)  # turn it into a constant
-        else:
-            cval = x.right.value
-        steps.append((x.op, cval))
-        return l
-    seed = unwind(node)
-    return seed, steps
-
 class EquationGenerator:
     """
     This class generates a randomized equation that evaluates to a target value.  
     For simplicity, we limit the operators to {+, -, *, /, ^2, ^3, ^4, ^5}.
-    We want to keep the math simple, avoiding negative values. For example, 
-    if we want to subtract 5, we pair (-, 5) instead of (+, -5).
-    We also avoid equations with multiple subtrees, meaning we avoid equations 
-    where the distributive quality applies over multiple parenthesis, like
-    ((1 + 2) / 3 + (4 - 5)) / 6. This makes for simple equations that are easy 
-    to type on a regular non-scientific calculator.
+    We want to keep the math simple, without distributive operations acting on 
+    multiple parenthesis. The goal is to have a simple equation that can be typed
+    on a basic calculator.
 
     We bias the numbers in the equation toward fact-rich numbers. See PREF_INTS.
     But to make things more interesting, ocasionally draw random numbers from 
@@ -256,13 +121,15 @@ class EquationGenerator:
         return list(out) if out else [1]
 
     def _build(self, y, max_depth):
-        """Returns a TREE representing an expression that evaluates to y.
+        """Builds an expression that evaluates to y.
+        Example: y = ((123 + 7) * 12) - 14
+        
+        An expression chained of (op, val) steps is returned.
+        Example chain: [("seed", 123), ("+", 7), ("*", 12), ("-", 14)]
         """
-        candidates = []  # (operator, constant, previous value)
+        candidates = []  # (operator, value)
 
-        # build the chain backwards from the target value y
-        curr = y
-        c = self._ran_int_weighted()  # random seed value
+        curr = y  # we build the chain backwards from the target value y
         
         # To prevent very long equations or large integers, 
         # we enforce an exponent early on, in the first 0-3 operations. 
@@ -275,17 +142,17 @@ class EquationGenerator:
                 exp, root, dist = find_closest_root(curr)
                 if dist != 0:
                     if dist > 0: 
-                        prev = curr - dist
-                        candidates.append(("+", dist, prev))
+                        comp = curr - dist
+                        candidates.append(("+", dist))
                     else:
-                        prev = curr + abs(dist)
-                        candidates.append(("-", abs(dist), prev))
-                curr = prev
-                i += 1
+                        comp = curr + abs(dist)
+                        candidates.append(("-", abs(dist)))
+                    curr = comp
+                    i += 1
 
                 # 2. Apply the exponent
                 fop = f"e{exp}"
-                candidates.append((fop, None, root))
+                candidates.append((fop, root))
                 curr = root
                 i += 1
                 continue
@@ -294,25 +161,25 @@ class EquationGenerator:
             if curr > 2:
                 r = perfect_square_root(curr)
                 if r is not None:
-                    candidates.append(('e2', None, r))
+                    candidates.append(('e2', r))
                     curr = r
-                    i = + 1
+                    i += 1
                     continue
 
                 r = perfect_cube_root(curr)
                 if r is not None:
-                    candidates.append(('e3', None, r))
+                    candidates.append(('e3', r))
                     curr = r
-                    i = + 1
+                    i += 1
                     continue
 
             # Else select a random binary operators (+, -, *, /)
             op = self._ran_op_weighted()
             if op == '+':
                 c = self._ran_int_weighted()
-                prev = curr - c
-                candidates.append(('+', c, prev))
-                curr = prev
+                comp = curr - c
+                candidates.append(('+', c))
+                curr = comp
                 i += 1
             
             elif op == '-':
@@ -320,9 +187,9 @@ class EquationGenerator:
                 c = self._ran_int_weighted()
                 while c > 20:
                     c = self._ran_int_weighted()
-                prev = curr + c
-                candidates.append(('-', c, prev))
-                curr = prev
+                comp = curr + c
+                candidates.append(('-', c))
+                curr = comp
                 i += 1
 
             elif op == '*':
@@ -336,43 +203,34 @@ class EquationGenerator:
                 else:
                     c = self.rng.choice(divisors)
                     
-                prev = curr // c
-                candidates.append(('*', c, prev))
-                curr = prev 
+                comp = curr // c
+                candidates.append(('*', c))
+                curr = comp 
                 i += 1
 
             elif op == '/':
                 # we avoid dividing by large numbers to reach the target faster
-                c = self.rng.randint(2, 10)
-                prev = curr * c
-                candidates.append(('/', c, prev))
-                curr = prev
+                c = self.rng .randint(2, 10)
+                comp = curr * c
+                candidates.append(('/', c))
+                curr = comp
                 i += 1
 
             else:
                 raise ValueError(f"Unknown operator: {op}")
-            
-        # Now reverse the chain to generate the equation
-        seed_val = curr 
-        eq_tree = Const(seed_val)
-
-        for op, c, _ in reversed(candidates):
-            if op in {'e2', 'e3', 'e4', 'e5'}:
-                eq_tree = UnaryOp(op, eq_tree)
-            else:
-                eq_tree = BinaryOp(op, eq_tree, Const(c))
         
-        return eq_tree
+        steps = [(op, val) for op, val in candidates]
+
+        # Get the leftover value. 
+        # Once we reverse the chain, this will be the frist value in the chain
+        seed = curr
+        steps.append(("seed", seed))
+        return steps[::-1]
     
     def sample(self, y, max_depth=8):
-        """Returns a randomized expression that evaluates to y.
-        Output:
-        **eq**: The generated expression as a tree.
-        **infix**: The generated expression in infix notation (regular math format).
-        **tokens**: The generated equation as a list of prefix tokens, 
-                    with 'CONST' as placeholders for constants.
-        **consts**: The list of constant values corresponding to the 'CONST' tokens.
-        **value**: The integer value that the generated equation evaluates to (should equal y).
+        """Returns a randomized expression that evaluates to y. 
+        The expression is an ordered chain of (op, val) steps. See _build.
+        max_depth determines the maximum number of operations.
         """
         if not isinstance(y, int) or y < 0:
             raise ValueError("The target value must be a positive integer.")
@@ -386,15 +244,5 @@ class EquationGenerator:
         if max_depth < 5:
             raise ValueError("max_depth must be at least 5.")
 
-        eq = self._build(y, max_depth)
-        eval = eval_expr(eq)
-        if eval != y:
-            print(to_infix(eq))
-            raise ValueError(f"Generated expression does not evaluate to target value: {eval} != {y}")
-        
-        tokens, consts = to_prefix_tokens(eq, const_token="CONST", add_eos=True)
-
-        return {"expr": eq, 
-                "infix": to_infix(eq), 
-                "tokens": tokens,
-                "consts": consts}
+        chain = self._build(y, max_depth)
+        return chain

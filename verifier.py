@@ -19,8 +19,8 @@ def load_verifier():
     tokenizer = AutoTokenizer.from_pretrained(VERIFIER_MODEL_ID)
     model = AutoModelForCausalLM.from_pretrained(
         VERIFIER_MODEL_ID,
-        dtype=torch.float32,
-        device_map="cpu",
+        dtype=torch.bfloat16,
+        device_map="auto",
     )
     model.eval()
     return model, tokenizer
