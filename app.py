@@ -2,32 +2,74 @@ import json
 import random
 import spaces
 import gradio as gr
-from gradio.themes.utils import colors as _c
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
 from puzzle import generate_puzzle, validate_phone_number
 
-_VIBRANT = [
-    _c.red, _c.pink, _c.fuchsia, _c.purple, _c.indigo, _c.blue,
-    _c.cyan, _c.teal, _c.emerald, _c.green, _c.amber, _c.orange,
+# Color pools each page load randomly draws from. Boxes/panels and buttons
+# pick independently; input fields and borders are derived by lightening/
+# darkening whichever box color got picked, not their own pool.
+_BG_POOL = [
+    "#EBB394", "#E8AE64", "#D1DB88", "#C1E09F", "#ACD9A3", "#A3D9AC",
+    "#9CDBC9", "#9BCCE0", "#B5C2E8", "#C5B5E8", "#DCB5E8", "#E8B5E0", "#E6AEC7",
 ]
-_NEUTRALS = [_c.slate, _c.gray, _c.zinc, _c.neutral, _c.stone]
-_SHADES = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]
+_BOX_POOL = ["#6E0E25", "#6E0E66", "#430E6E", "#0E1B6E", "#0E596E", "#0E6E41"]
+_BUTTON_POOL = [
+    "#BD0030", "#BD00B0", "#6E00BD", "#1800B3", "#005FB3",
+    "#048A82", "#048A3C", "#1D8A04", "#8A3304",
+]
+_TEXT_COLOR = "#FFFFFF"
+_INPUT_LIGHTEN = 0.18
+_BORDER_DARKEN = 0.20
+_HOVER_DARKEN = 0.12
 
-_primary, _secondary = random.sample(_VIBRANT, 2)
-_theme = gr.themes.Soft(
-    primary_hue=_primary,
-    secondary_hue=_secondary,
-    neutral_hue=random.choice(_NEUTRALS),
-).set(
-    background_fill_primary="*primary_50",
-    background_fill_secondary="*secondary_50",
+
+def _blend(hex_color, target_rgb, amount):
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    tr, tg, tb = target_rgb
+    nr = round(r + (tr - r) * amount)
+    ng = round(g + (tg - g) * amount)
+    nb = round(b + (tb - b) * amount)
+    return f"#{nr:02x}{ng:02x}{nb:02x}"
+
+
+def _lighten(hex_color, amount=_INPUT_LIGHTEN):
+    return _blend(hex_color, (255, 255, 255), amount)
+
+
+def _darken(hex_color, amount=_BORDER_DARKEN):
+    return _blend(hex_color, (0, 0, 0), amount)
+
+
+_bg = random.choice(_BG_POOL)
+_box = random.choice(_BOX_POOL)
+_button_primary, _button_secondary = random.sample(_BUTTON_POOL, 2)
+_theme = gr.themes.Soft().set(
+    body_background_fill=_bg,
+    body_text_color=_TEXT_COLOR,
+    block_background_fill=_box,
+    block_border_color=_darken(_box),
+    block_border_width="2px",
+    panel_background_fill=_box,
+    panel_border_color=_darken(_box),
+    block_label_background_fill=_button_primary,
+    block_label_border_color=_darken(_button_primary),
+    block_label_text_color=_TEXT_COLOR,
+    block_title_text_color=_TEXT_COLOR,
+    input_background_fill=_lighten(_box),
+    input_border_color=_darken(_box),
+    input_border_width="2px",
+    button_primary_background_fill=_button_primary,
+    button_primary_background_fill_hover=_darken(_button_primary, _HOVER_DARKEN),
+    button_primary_border_color=_darken(_button_primary),
+    button_primary_text_color=_TEXT_COLOR,
+    button_secondary_background_fill=_button_secondary,
+    button_secondary_background_fill_hover=_darken(_button_secondary, _HOVER_DARKEN),
+    button_secondary_border_color=_darken(_button_secondary),
+    button_secondary_text_color=_TEXT_COLOR,
 )
-
-
-def _palette_json(hues):
-    return json.dumps([{f"c{s}": getattr(hue, f"c{s}") for s in _SHADES} for hue in hues])
 
 
 # Gradio's theme= only picks colors once, when this process starts (baked into
@@ -53,20 +95,61 @@ def _palette_json(hues):
 _COLOR_HEAD = f"""
 <script>
 (function() {{
-    var VIBRANT = {_palette_json(_VIBRANT)};
-    var NEUTRALS = {_palette_json(_NEUTRALS)};
-    var SHADES = {json.dumps(_SHADES)};
+    var BG_POOL = {json.dumps(_BG_POOL)};
+    var BOX_POOL = {json.dumps(_BOX_POOL)};
+    var BUTTON_POOL = {json.dumps(_BUTTON_POOL)};
+    var TEXT_COLOR = {json.dumps(_TEXT_COLOR)};
+    var INPUT_LIGHTEN = {json.dumps(_INPUT_LIGHTEN)};
+    var BORDER_DARKEN = {json.dumps(_BORDER_DARKEN)};
+    var HOVER_DARKEN = {json.dumps(_HOVER_DARKEN)};
 
-    var pool = VIBRANT.slice();
-    var primary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-    var secondary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
-    var neutral = NEUTRALS[Math.floor(Math.random() * NEUTRALS.length)];
+    function pick(arr) {{ return arr[Math.floor(Math.random() * arr.length)]; }}
+    function pickTwo(arr) {{
+        var pool = arr.slice();
+        var a = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+        var b = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+        return [a, b];
+    }}
+    function blend(hex, target, amount) {{
+        var r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+        var nr = Math.round(r + (target[0] - r) * amount);
+        var ng = Math.round(g + (target[1] - g) * amount);
+        var nb = Math.round(b + (target[2] - b) * amount);
+        return '#' + [nr, ng, nb].map(function(v) {{ return v.toString(16).padStart(2, '0'); }}).join('');
+    }}
+    function lighten(hex, amount) {{ return blend(hex, [255, 255, 255], amount === undefined ? INPUT_LIGHTEN : amount); }}
+    function darken(hex, amount) {{ return blend(hex, [0, 0, 0], amount === undefined ? BORDER_DARKEN : amount); }}
 
-    var decls = SHADES.map(function(s) {{
-        return '--primary-' + s + ': ' + primary['c' + s] + ' !important;'
-             + '--secondary-' + s + ': ' + secondary['c' + s] + ' !important;'
-             + '--neutral-' + s + ': ' + neutral['c' + s] + ' !important;';
-    }}).join('\\n');
+    var bg = pick(BG_POOL);
+    var box = pick(BOX_POOL);
+    var buttons = pickTwo(BUTTON_POOL);
+    var buttonPrimary = buttons[0], buttonSecondary = buttons[1];
+
+    var vars = {{
+        '--body-background-fill': bg,
+        '--body-text-color': TEXT_COLOR,
+        '--block-background-fill': box,
+        '--block-border-color': darken(box),
+        '--block-border-width': '2px',
+        '--panel-background-fill': box,
+        '--panel-border-color': darken(box),
+        '--block-label-background-fill': buttonPrimary,
+        '--block-label-border-color': darken(buttonPrimary),
+        '--block-label-text-color': TEXT_COLOR,
+        '--block-title-text-color': TEXT_COLOR,
+        '--input-background-fill': lighten(box),
+        '--input-border-color': darken(box),
+        '--input-border-width': '2px',
+        '--button-primary-background-fill': buttonPrimary,
+        '--button-primary-background-fill-hover': darken(buttonPrimary, HOVER_DARKEN),
+        '--button-primary-border-color': darken(buttonPrimary),
+        '--button-primary-text-color': TEXT_COLOR,
+        '--button-secondary-background-fill': buttonSecondary,
+        '--button-secondary-background-fill-hover': darken(buttonSecondary, HOVER_DARKEN),
+        '--button-secondary-border-color': darken(buttonSecondary),
+        '--button-secondary-text-color': TEXT_COLOR,
+    }};
+    var decls = Object.keys(vars).map(function(k) {{ return k + ': ' + vars[k] + ' !important;'; }}).join('\\n');
     var css = ':root, :root.dark, :root .dark, .dark {{\\n' + decls + '\\n}}';
 
     var style = null;
@@ -99,15 +182,15 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
         domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
 
         if not phone_raw:
-            return gr.update(), gr.update(), "Please enter a phone number.", "", "", 0, False
+            return gr.update(), gr.update(), gr.update(value="Please enter a phone number.", visible=True), "", "", 0, False
         domains = [d for d in [domain1, domain2, domain3] if d]
         if len(domains) < 3:
-            return gr.update(), gr.update(), "Please enter all three interests.", "", "", 0, False
+            return gr.update(), gr.update(), gr.update(value="Please enter all three interests.", visible=True), "", "", 0, False
 
         try:
             phone = validate_phone_number(phone_raw)
         except ValueError as e:
-            return gr.update(), gr.update(), f"Invalid phone number: {e}", "", "", 0, False
+            return gr.update(), gr.update(), gr.update(value=f"Invalid phone number: {e}", visible=True), "", "", 0, False
 
         if g_model is None:
             print(f"Loading generator ({MODEL_ID})...")
@@ -120,9 +203,9 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             phone, domains, g_model, g_tokenizer, v_model, v_tokenizer
         )
         return (
-            gr.update(visible=False),   # hide page 1
-            gr.update(visible=True),    # show page 2
-            "",                         # clear error
+            gr.update(visible=False),               # hide page 1
+            gr.update(visible=True),                # show page 2
+            gr.update(value="", visible=False),      # clear+hide error
             puzzle,
             eq["infix"],
             0,
@@ -130,7 +213,8 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
         )
     except Exception as e:
         import traceback
-        return gr.update(), gr.update(), f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}", "", "", 0, False
+        error_msg = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
+        return gr.update(), gr.update(), gr.update(value=error_msg, visible=True), "", "", 0, False
 
 
 def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
@@ -154,10 +238,10 @@ def reveal(equation: str):
 
 def start_over():
     return (
-        gr.update(visible=True),   # show page 1
-        gr.update(visible=False),  # hide page 2
-        "",                        # clear error
-        "", "", 0, False,          # reset state
+        gr.update(visible=True),               # show page 1
+        gr.update(visible=False),              # hide page 2
+        gr.update(value="", visible=False),    # clear+hide error
+        "", "", 0, False,                      # reset state
     )
 
 
@@ -175,7 +259,7 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
             d2 = gr.Textbox(label="Interest 2", placeholder="e.g. history")
             d3 = gr.Textbox(label="Interest 3", placeholder="e.g. music")
         verify_checkbox = gr.Checkbox(label="Enable answer verification on next page")
-        error_output = gr.Textbox(label="", interactive=False, visible=True, show_label=False)
+        error_output = gr.Textbox(label="", interactive=False, visible=False, show_label=False)
         generate_btn = gr.Button("Generate Puzzle ➜", variant="primary")
 
     # ── Page 2 ──────────────────────────────────────────────────────────────
