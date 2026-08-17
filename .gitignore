@@ -11,6 +11,9 @@ wheels/
 
 # Data / results
 results.csv
+*_results.csv
+*_output.txt
+wrong_clues.csv
 *.jsonl
 
 # Claude memory
