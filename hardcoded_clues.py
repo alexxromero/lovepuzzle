@@ -10,7 +10,7 @@ from hardcoded_clues_data import HARDCODED_CLUES
 _SIMILARITY_THRESHOLD = 0.45
 _DIFF_RATIO_THRESHOLD = 0.15
 
-_embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+_embed_model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
 _ALL_TAGS = sorted({tag for entries in HARDCODED_CLUES.values() for _, tags in entries for tag in tags})
 _tag_embeddings = _embed_model.encode(_ALL_TAGS, normalize_embeddings=True)
