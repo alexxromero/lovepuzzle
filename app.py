@@ -34,20 +34,22 @@ def _palette_json(hues):
 # theme.css served to every visitor). To get a fresh random palette on every
 # individual page load, we re-roll client-side.
 #
-# theme.css is not a static <link> in the page -- Gradio's app JS fetches and
-# attaches it itself during startup, and awaits that before running our
-# custom head HTML. That already puts us last in line, but Gradio's client
-# re-runs that same "attach theme.css, then run custom head" sequence a
-# second time on its SSE reconnect path shortly after initial load, which
-# re-attaches theme.css *after* our first override. A <style> block, even
-# with !important, is just another stylesheet competing on load order, so it
-# can lose that second race.
+# The deployed Gradio version (5.0.0, pinned by the HF Space's sdk_version)
+# scopes its dark-mode variables to a bare `.dark { ... }` rule, and that
+# class lands on a container element *below* <html>, not on <html> itself.
+# That rules out overriding via inline style on document.documentElement:
+# inline !important only outranks a stylesheet rule when both target the
+# *same* element. Here they don't -- our value on <html> only reaches the
+# .dark container by inheritance, and a direct (even non-important) rule on
+# an element always wins over an inherited one, regardless of importance.
 #
-# Inline style on the root element wins regardless: per the CSS cascade,
-# inline !important always beats stylesheet !important no matter which one
-# was applied more recently. We also reassert the same (not re-rolled)
-# values via a MutationObserver in case anything else gets re-inserted into
-# <head> later, so the colors picked for this page load can't be undone.
+# So the override has to be a real stylesheet rule using the same selectors
+# Gradio uses (:root and .dark), which matches wherever that class actually
+# ends up. Selector + !important + later in the document beats theme.css's
+# same-specificity, non-important rule. SvelteKit's hydration can reorder or
+# re-insert <head> content after our script runs, so a MutationObserver
+# re-appends our <style> tag to the end of <head> whenever that happens,
+# keeping us last (and therefore winning) without re-rolling the colors.
 _COLOR_HEAD = f"""
 <script>
 (function() {{
@@ -60,13 +62,22 @@ _COLOR_HEAD = f"""
     var secondary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
     var neutral = NEUTRALS[Math.floor(Math.random() * NEUTRALS.length)];
 
-    var root = document.documentElement.style;
+    var decls = SHADES.map(function(s) {{
+        return '--primary-' + s + ': ' + primary['c' + s] + ' !important;'
+             + '--secondary-' + s + ': ' + secondary['c' + s] + ' !important;'
+             + '--neutral-' + s + ': ' + neutral['c' + s] + ' !important;';
+    }}).join('\\n');
+    var css = ':root, :root.dark, :root .dark, .dark {{\\n' + decls + '\\n}}';
+
+    var style = null;
     function apply() {{
-        SHADES.forEach(function(s) {{
-            root.setProperty('--primary-' + s, primary['c' + s], 'important');
-            root.setProperty('--secondary-' + s, secondary['c' + s], 'important');
-            root.setProperty('--neutral-' + s, neutral['c' + s], 'important');
-        }});
+        if (!style || !style.isConnected) {{
+            style = document.createElement('style');
+            document.head.appendChild(style);
+        }} else if (document.head.lastElementChild !== style) {{
+            document.head.appendChild(style);
+        }}
+        style.textContent = css;
     }}
 
     apply();
