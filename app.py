@@ -31,18 +31,23 @@ def _palette_json(hues):
 
 
 # Gradio's theme= only picks colors once, when this process starts (baked into
-# the CSS served to every visitor). To get a fresh random palette on every
+# theme.css served to every visitor). To get a fresh random palette on every
 # individual page load, we re-roll client-side.
 #
-# Gradio's compiled theme.css defines --primary-*/--secondary-*/--neutral-*
-# twice: once under `:root` and again under `:root.dark, :root .dark` (its
-# dark-mode variant). Whichever element ends up carrying the .dark class
-# re-declares these variables closer to the actual components than an inline
-# override on <html> reaches -- inheritance doesn't care that our value has a
-# stronger origin, only that it's farther away -- so a plain inline override
-# loses for anything inside that subtree. Fix: inject a <style> block that
-# targets those exact same selectors with !important, so it wins the cascade
-# outright regardless of which element carries .dark or load order.
+# theme.css is not a static <link> in the page -- Gradio's app JS fetches and
+# attaches it itself during startup, and awaits that before running our
+# custom head HTML. That already puts us last in line, but Gradio's client
+# re-runs that same "attach theme.css, then run custom head" sequence a
+# second time on its SSE reconnect path shortly after initial load, which
+# re-attaches theme.css *after* our first override. A <style> block, even
+# with !important, is just another stylesheet competing on load order, so it
+# can lose that second race.
+#
+# Inline style on the root element wins regardless: per the CSS cascade,
+# inline !important always beats stylesheet !important no matter which one
+# was applied more recently. We also reassert the same (not re-rolled)
+# values via a MutationObserver in case anything else gets re-inserted into
+# <head> later, so the colors picked for this page load can't be undone.
 _COLOR_HEAD = f"""
 <script>
 (function() {{
@@ -55,15 +60,17 @@ _COLOR_HEAD = f"""
     var secondary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
     var neutral = NEUTRALS[Math.floor(Math.random() * NEUTRALS.length)];
 
-    var decls = SHADES.map(function(s) {{
-        return '--primary-' + s + ': ' + primary['c' + s] + ' !important;'
-             + '--secondary-' + s + ': ' + secondary['c' + s] + ' !important;'
-             + '--neutral-' + s + ': ' + neutral['c' + s] + ' !important;';
-    }}).join('\\n');
+    var root = document.documentElement.style;
+    function apply() {{
+        SHADES.forEach(function(s) {{
+            root.setProperty('--primary-' + s, primary['c' + s], 'important');
+            root.setProperty('--secondary-' + s, secondary['c' + s], 'important');
+            root.setProperty('--neutral-' + s, neutral['c' + s], 'important');
+        }});
+    }}
 
-    var style = document.createElement('style');
-    style.textContent = ':root, :root.dark, :root .dark, .dark {{\\n' + decls + '\\n}}';
-    document.head.appendChild(style);
+    apply();
+    new MutationObserver(apply).observe(document.head, {{childList: true}});
 }})();
 </script>
 """
