@@ -1,3 +1,4 @@
+import json
 import random
 import spaces
 import gradio as gr
@@ -12,6 +13,7 @@ _VIBRANT = [
     _c.cyan, _c.teal, _c.emerald, _c.green, _c.amber, _c.orange,
 ]
 _NEUTRALS = [_c.slate, _c.gray, _c.zinc, _c.neutral, _c.stone]
+_SHADES = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]
 
 _primary, _secondary = random.sample(_VIBRANT, 2)
 _theme = gr.themes.Soft(
@@ -22,6 +24,39 @@ _theme = gr.themes.Soft(
     background_fill_primary="*primary_50",
     background_fill_secondary="*secondary_50",
 )
+
+
+def _palette_json(hues):
+    return json.dumps([{f"c{s}": getattr(hue, f"c{s}") for s in _SHADES} for hue in hues])
+
+
+# Gradio's theme= only picks colors once, when this process starts (baked into
+# the CSS served to every visitor). To get a fresh random palette on every
+# individual page load, we re-roll client-side: this overrides the same
+# --primary-*/--secondary-*/--neutral-* CSS variables the theme defines, which
+# every derived Gradio color (buttons, backgrounds, etc.) references via
+# var(...), so the override cascades everywhere for free.
+_COLOR_HEAD = f"""
+<script>
+(function() {{
+    var VIBRANT = {_palette_json(_VIBRANT)};
+    var NEUTRALS = {_palette_json(_NEUTRALS)};
+    var SHADES = {json.dumps(_SHADES)};
+
+    var pool = VIBRANT.slice();
+    var primary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    var secondary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    var neutral = NEUTRALS[Math.floor(Math.random() * NEUTRALS.length)];
+
+    var root = document.documentElement.style;
+    SHADES.forEach(function(s) {{
+        root.setProperty('--primary-' + s, primary['c' + s]);
+        root.setProperty('--secondary-' + s, secondary['c' + s]);
+        root.setProperty('--neutral-' + s, neutral['c' + s]);
+    }});
+}})();
+</script>
+"""
 
 g_model, g_tokenizer = None, None
 v_model, v_tokenizer = None, None
@@ -39,7 +74,7 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             return gr.update(), gr.update(), "Please enter a phone number.", "", "", 0, False
         domains = [d for d in [domain1, domain2, domain3] if d]
         if len(domains) < 3:
-            return gr.update(), gr.update(), "Please enter all three domains.", "", "", 0, False
+            return gr.update(), gr.update(), "Please enter all three interests.", "", "", 0, False
 
         try:
             phone = validate_phone_number(phone_raw)
@@ -98,7 +133,7 @@ def start_over():
     )
 
 
-with gr.Blocks(title="Love Puzzle", theme=_theme) as demo:
+with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
     equation_state = gr.State("")
     attempts_state = gr.State(0)
     verify_state = gr.State(False)
@@ -108,9 +143,9 @@ with gr.Blocks(title="Love Puzzle", theme=_theme) as demo:
         gr.Markdown("# 💌 Love Puzzle\nGenerate a puzzle from a phone number.")
         phone_input = gr.Textbox(label="Phone number", placeholder="e.g. (555) 867-5309")
         with gr.Row():
-            d1 = gr.Textbox(label="Domain 1", placeholder="e.g. sports")
-            d2 = gr.Textbox(label="Domain 2", placeholder="e.g. history")
-            d3 = gr.Textbox(label="Domain 3", placeholder="e.g. music")
+            d1 = gr.Textbox(label="Interest 1", placeholder="e.g. sports")
+            d2 = gr.Textbox(label="Interest 2", placeholder="e.g. history")
+            d3 = gr.Textbox(label="Interest 3", placeholder="e.g. music")
         verify_checkbox = gr.Checkbox(label="Enable answer verification on next page")
         error_output = gr.Textbox(label="", interactive=False, visible=True, show_label=False)
         generate_btn = gr.Button("Generate Puzzle ➜", variant="primary")
