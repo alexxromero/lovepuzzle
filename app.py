@@ -36,6 +36,12 @@ def _palette_json(hues):
 # --primary-*/--secondary-*/--neutral-* CSS variables the theme defines, which
 # every derived Gradio color (buttons, backgrounds, etc.) references via
 # var(...), so the override cascades everywhere for free.
+#
+# Gradio applies this head= script itself, client-side, via its own JS -- and
+# that same JS re-fetches and re-applies its own fixed, server-baked theme.css
+# right around the same time (and again later, e.g. on reconnect), which can
+# stomp a one-shot override. So instead of setting the palette once, we keep
+# reasserting the same random pick for a few seconds to reliably win.
 _COLOR_HEAD = f"""
 <script>
 (function() {{
@@ -48,12 +54,22 @@ _COLOR_HEAD = f"""
     var secondary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
     var neutral = NEUTRALS[Math.floor(Math.random() * NEUTRALS.length)];
 
-    var root = document.documentElement.style;
-    SHADES.forEach(function(s) {{
-        root.setProperty('--primary-' + s, primary['c' + s]);
-        root.setProperty('--secondary-' + s, secondary['c' + s]);
-        root.setProperty('--neutral-' + s, neutral['c' + s]);
-    }});
+    function apply() {{
+        var root = document.documentElement.style;
+        SHADES.forEach(function(s) {{
+            root.setProperty('--primary-' + s, primary['c' + s]);
+            root.setProperty('--secondary-' + s, secondary['c' + s]);
+            root.setProperty('--neutral-' + s, neutral['c' + s]);
+        }});
+    }}
+
+    apply();
+    var tries = 0;
+    var timer = setInterval(function() {{
+        apply();
+        tries += 1;
+        if (tries > 25) clearInterval(timer);  // ~5s at 200ms
+    }}, 200);
 }})();
 </script>
 """
