@@ -1,7 +1,7 @@
 import csv
 import sys
 import traceback
-from clue_generator import load_model, MODEL_ID, generate_clues, find_best
+from clue_generator import load_model, MODEL_ID, generate_clues, validate_clues
 from verifier import load_verifier, VERIFIER_MODEL_ID
 
 INPUTS = [
@@ -41,13 +41,15 @@ def main():
             print(f"[{i+1}/{len(INPUTS)}] {number} | {domain}", end=" ... ", flush=True)
             try:
                 clues = generate_clues(g_model, g_tokenizer, number, domain, N_CLUES)
-                best_clue, diff, v_confidence = find_best(v_model, v_tokenizer, clues, number)
+                valid_clues = validate_clues(v_model, v_tokenizer, clues, number)
 
-                if best_clue is None:
+                if not valid_clues:
                     writer.writerow([number, domain, clues, "NO VALID CLUE", "", ""])
                     f.flush()
                     print("no valid clue")
                     continue
+
+                best_clue, diff, v_confidence = valid_clues[0]
 
                 best_clue_corrected = ""
                 if diff:

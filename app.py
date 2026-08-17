@@ -5,7 +5,7 @@ from gradio.themes.utils import colors as _c
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
-from puzzle import generate_puzzle, _validate_phone
+from puzzle import generate_puzzle, validate_phone_number
 
 _VIBRANT = [
     _c.red, _c.pink, _c.fuchsia, _c.purple, _c.indigo, _c.blue,
@@ -42,7 +42,7 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             return gr.update(), gr.update(), "Please enter all three domains.", "", "", 0, False
 
         try:
-            phone = _validate_phone(phone_raw)
+            phone = validate_phone_number(phone_raw)
         except ValueError as e:
             return gr.update(), gr.update(), f"Invalid phone number: {e}", "", "", 0, False
 
@@ -72,7 +72,7 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
 
 def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
     try:
-        phone = _validate_phone(phone_raw.strip())
+        phone = validate_phone_number(phone_raw.strip())
         guess_digits = guess.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
         if str(phone) == guess_digits:
             return "Correct! 🎉", attempts, gr.update(visible=False), gr.update(visible=False)

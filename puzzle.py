@@ -3,7 +3,7 @@ import random
 import phonenumbers
 
 from equation_maker import EquationGenerator, PREF_INTS
-from clue_generator import load_model, generate_clues, find_best, MODEL_ID
+from clue_generator import load_model, generate_clues, validate_clues, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
 from hardcoded_clues import get_hardcoded_clue
 from alternative_representations import (
@@ -48,7 +48,7 @@ def _content_words(clue):
 class ClueRegistry:
     """Tracks clues used in a puzzle to avoid duplicates."""
 
-    DUPLICATE_THRESHOLD = 0.6
+    DUPLICATE_THRESHOLD = 0.4
 
     def __init__(self):
         # for each string, we save the set of relevant content words
@@ -91,15 +91,17 @@ def validate_phone_number(raw):
 
 def get_inputs():
     raw = input("Enter a phone number: ").strip()
-    phone = validate_phone_number(raw)
+    phone_num = validate_phone_number(raw)
 
     print("Enter three interests (e.g. sports, history, music):")
     domains = []
     for i in range(1, 4):
-        domain = input(f"  Interest {i}: ").strip()
+        domain = ""
+        while not domain:
+            domain = input(f"  Interest {i}: ").strip()
         domains.append(domain)
 
-    return phone, domains
+    return phone_num, domains
 
 
 def narrate_step(op, val, clue, correction):
@@ -127,11 +129,11 @@ def build_puzzle_text(seed, clues_info):
     return "\n".join(lines)
 
 
-def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer):
-    """Try to build a puzzle for the given phone number and seed.
+def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer):
+    """Build a puzzle for the given phone number and seed.
     Returns (eq, puzzle, n_valid_clues).
     """
-    equation_chain = EquationGenerator(seed=seed).sample(phone)
+    equation_chain = EquationGenerator(seed=seed).sample(phone_num)
     seed_op, seed_val = equation_chain[0]
     assert(seed_op == "seed")
 
@@ -141,21 +143,25 @@ def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tok
 
     # First pass: LMM clue generator
     for op, val in equation_chain[1:]:
-        if op in ('e2', 'e3', 'e4', 'e5') or val not in PREF_INTS:
+        if op in ('e2', 'e3', 'e4', 'e5') or not (val in PREF_INTS or val < 100):
             # no clue generation
             clues_info.append((op, val, None, None, None, None))
             continue
 
         domain = random.choice(domains)
         candidates = generate_clues(g_model, g_tokenizer, val, domain, N_CLUES)
-        best, diff, _ = find_best(v_model, v_tokenizer, candidates, val)
-        # TODO: don't throw away the rest of the generated clues. If the best clue is duplicate, move on to the next
-        if best is not None and registry.is_duplicate(best):
-            best = None
-        if best is not None:
-            registry.register(best)
-        source = CLUE_SOURCE_GENERATED if best is not None else None
-        clues_info.append((op, val, best, diff, domain, source))
+        valid_clues = validate_clues(v_model, v_tokenizer, candidates, val)
+        best_clue, best_clue_diff = None, None
+        for clue, diff, _ in valid_clues:
+            if registry.is_duplicate(clue):
+                continue
+            best_clue = clue
+            best_clue_diff = diff
+            registry.register(clue)
+            break
+
+        source = CLUE_SOURCE_GENERATED if best_clue is not None else None
+        clues_info.append((op, val, best_clue, best_clue_diff, domain, source))
         
     # Second pass: for values without a clue, look up if there are any hard-coded clues
     # that we can use
@@ -164,59 +170,56 @@ def _try_build_puzzle(phone, domains, seed, g_model, g_tokenizer, v_model, v_tok
             continue
         if domain is None:  # likely not a fact-rich number
             continue
-        hardcoded = get_hardcoded_clue(val, domain)
+        hardcoded, diff = get_hardcoded_clue(val, domain)
         if hardcoded and not registry.is_duplicate(hardcoded):
             registry.register(hardcoded)
-            clues_info[i] = (op, val, hardcoded, None, "misc", CLUE_SOURCE_HARDCODED)
+            clues_info[i] = (op, val, hardcoded, diff, "misc", CLUE_SOURCE_HARDCODED)
 
     # Third pass: try alternative representations.
-    # Binary is domain-gated (tech/math only) and limited to one use per puzzle.
-    _BINARY_DOMAINS = {'math', 'mathematics', 'science', 'computers', 'computing',
-                       'technology', 'engineering', 'physics', 'programming'}
-    binary_used = False
+    # Each representation type may appear at most once per puzzle.
+    used_reps = set()
+    representations = [
+        ("prime_rep", prime_ordinal_clue),
+        ("fibonacci_rep", fibonacci_ordinal_clue),
+        ("roman_rep", roman_clue),
+        ("spanish_rep", spanish_clue),
+        ("binary_rep", binary_clue),
+    ]
     for i, (op, val, clue_text, _, domain, _) in enumerate(clues_info):
         if clue_text is not None or val is None:
             continue
 
-        clue = prime_ordinal_clue(val)
-        if clue is not None:
-            domain = "prime_rep"
-        if clue is None:
-            clue = fibonacci_ordinal_clue(val)
+        clue, rep_name = None, None
+        for name, rep_fn in representations:
+            if name in used_reps:
+                continue
+            clue = rep_fn(val)
             if clue is not None:
-                domain = "fibonacci_rep"
-        if clue is None:
-            clue = roman_clue(val)
-            if clue is not None:
-                domain = "roman_rep"
-        if clue is None:
-            clue = spanish_clue(val)
-            if clue is not None:
-                domain = "spanish_rep"
-        if clue is None and not binary_used and domain and domain.lower().strip() in _BINARY_DOMAINS:
-            clue = binary_clue(val)
-            domain = "binary_rep"
-            binary_used = True
+                rep_name = name
+                break
 
         if clue is not None and not registry.is_duplicate(clue):
             registry.register(clue)
-            clues_info[i] = (op, val, clue, None, domain, CLUE_SOURCE_ALTERNATIVE)
+            used_reps.add(rep_name)
+            clues_info[i] = (op, val, clue, None, rep_name, CLUE_SOURCE_ALTERNATIVE)
 
     n_valid = sum(1 for _, _, clue, _, _, _ in clues_info if clue is not None)
     puzzle = build_puzzle_text(seed_val, clues_info)
     return equation_chain, puzzle, n_valid, clues_info
 
 
-def generate_puzzle(phone, domains, g_model, g_tokenizer, v_model, v_tokenizer):
+def generate_puzzle(phone_num, domains, g_model, g_tokenizer, v_model, v_tokenizer):
+    # Do many tries in case a puzzle is invalid (has no value clues, n_valid=0)
     for attempt in range(MAX_RETRIES):
         seed = random.randint(0, 10000)
-        eq, puzzle, n_valid, clues_info = _try_build_puzzle(
-            phone, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer
+        eq, puzzle, n_valid, clues_info = _build_puzzle(
+            phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer
         )
         if n_valid > 0:
             print(f"\nEquation : {eq}\n")
             print(puzzle)
-            return eq, puzzle, clues_info
+            step_domains = [domain for (_, _, _, _, domain, _) in clues_info]
+            return eq, puzzle, clues_info, step_domains
         print(f"Attempt {attempt + 1}: no valid clues found, retrying...")
 
     raise ValueError(
@@ -226,8 +229,8 @@ def generate_puzzle(phone, domains, g_model, g_tokenizer, v_model, v_tokenizer):
 
 
 if __name__ == "__main__":
-    phone, domains = get_inputs()
-    print(f"\nPhone number : {phone}")
+    phone_num, domains = get_inputs()
+    print(f"\nPhone number : {phone_num}")
     print(f"Domains      : {domains}")
 
     print(f"\nLoading generator ({MODEL_ID})...")
@@ -236,4 +239,5 @@ if __name__ == "__main__":
     print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
     v_model, v_tokenizer = load_verifier()
 
-    generate_puzzle(phone, domains, g_model, g_tokenizer, v_model, v_tokenizer)
+    # returns (equation, puzzle, clues_info)
+    generate_puzzle(phone_num, domains, g_model, g_tokenizer, v_model, v_tokenizer)

@@ -19,7 +19,7 @@ PREF_INTS = {
     80: 4, 88: 2, 
     100: 4, 101: 2, 
     180: 2, 360: 2, 1000: 2,
-    1776: 1, 1969: 1, 2000: 1, 2020: 1, 2024: 1
+    1776: 1, 1969: 1, 2000: 1, 2020: 1, 2024: 1, 2025: 1, 2026: 1
 }
 
 pref_ints = list(PREF_INTS.keys())
@@ -124,7 +124,7 @@ class EquationGenerator:
         """Builds an expression that evaluates to y.
         Example: y = ((123 + 7) * 12) - 14
         
-        An expression chained of (op, val) steps is returned.
+        An equation is returned in the form of a chain, where each step in the chain is (op, val).
         Example chain: [("seed", 123), ("+", 7), ("*", 12), ("-", 14)]
         """
         candidates = []  # (operator, value)

@@ -1,0 +1,90 @@
+import re
+
+_SMALL_NUMBER_WORDS = {
+    1:    ["one"],
+    2:    ["two"],
+    3:    ["three"],
+    4:    ["four"],
+    5:    ["five"],
+    6:    ["six"],
+    7:    ["seven"],
+    8:    ["eight"],
+    9:    ["nine"],
+    10:   ["ten"],
+    11:   ["eleven"],
+    12:   ["twelve"],
+    13:   ["thirteen"],
+    14:   ["fourteen"],
+    15:   ["fifteen"],
+    16:   ["sixteen"],
+    18:   ["eighteen"],
+    20:   ["twenty"],
+    21:   ["twenty-one", "twenty one"],
+    24:   ["twenty-four", "twenty four"],
+    25:   ["twenty-five", "twenty five"],
+    26:   ["twenty-six", "twenty six"],
+    27:   ["twenty-seven", "twenty seven"],
+    28:   ["twenty-eight", "twenty eight"],
+    30:   ["thirty"],
+    32:   ["thirty-two", "thirty two"],
+    36:   ["thirty-six", "thirty six"],
+    42:   ["forty-two", "forty two"],
+    50:   ["fifty"],
+    52:   ["fifty-two", "fifty two"],
+    60:   ["sixty"],
+    66:   ["sixty-six", "sixty six"],
+    80:   ["eighty"],
+    88:   ["eighty-eight", "eighty eight"],
+    100:  ["hundred", "one hundred", "a hundred"],
+    101:  ["one hundred and one", "one hundred one", "a hundred and one"],
+    180:  ["one hundred and eighty", "one hundred eighty", "a hundred and eighty"],
+    360:  ["three hundred and sixty", "three hundred sixty"],
+    1000: ["one thousand", "a thousand"],
+    1776: ["seventeen seventy-six", 
+           "seventeen seventy six",
+           "seventeen hundred seventy-six", 
+           "seventeen hundred seventy six", 
+           "seventeen hundred and seventy-six",
+           "seventeen hundred and seventy six"],
+    1969: ["nineteen sixty-nine", 
+           "nineteen sixty nine",
+           "nineteen hundred sixty-nine",
+           "nineteen hundred sixty nine", 
+           "nineteen hundred and sixty-nine",
+           "nineteen hundred and sixty nine"],
+    2000: ["two thousand"],
+    2020: ["twenty twenty", 
+           "two thousand twenty", 
+           "two thousand and twenty"],
+    2024: ["twenty twenty-four", 
+           "twenty twenty four",
+           "two thousand twenty-four", 
+           "two thousand twenty four", 
+           "two thousand and twenty-four",
+           "two thousand and twenty four"],
+    2025: ["twenty twenty-five", 
+           "twenty twenty five",
+           "two thousand twenty-five",
+           "two thousand twenty five", 
+           "two thousand and twenty-five",
+           "two thousand and twenty five"],
+    2026: ["twenty twenty-six", 
+           "twenty twenty six",
+           "two thousand twenty-six", 
+           "two thousand twenty six", 
+           "two thousand and twenty-six",
+           "two thousand and twenty six"],
+}
+
+
+def reveals_answer(clue, target):
+    """Return True if the target number is in the clue."""
+    lower = clue.lower()
+    # first check the number itself
+    if re.search(rf'(?<!\d){re.escape(str(target))}(?!\d)', lower):
+        return True
+    # and also for any of the spellings
+    return any(
+        re.search(rf'\b{re.escape(w)}\b', lower)
+        for w in _SMALL_NUMBER_WORDS.get(target, [])
+    )

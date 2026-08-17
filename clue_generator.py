@@ -1,34 +1,20 @@
 import argparse
-import re
+import json
 import torch
+import re
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from verifier import load_verifier, verify, VERIFIER_MODEL_ID
+from number_words import reveals_answer
 
 MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
 
-_SMALL_NUMBER_WORDS = {
-    1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five',
-    6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
-    11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen',
-    15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
-    19: 'nineteen', 20: 'twenty',
-}
-
-
-def _reveals_answer(clue: str, target: int) -> bool:
-    """Return True if the clue explicitly contains the target number."""
-    lower = clue.lower()
-    if re.search(rf'(?<!\d){re.escape(str(target))}(?!\d)', lower):
-        return True
-    word = _SMALL_NUMBER_WORDS.get(target)
-    return bool(word and re.search(rf'\b{word}\b', lower))
-
-def _system_prompt(num_clues: int) -> str:
+def _system_prompt(num_clues):
     return (
         f"You are a trivia expert. When given a number and a domain, you generate "
         f"{num_clues} distinct, short (<20 words), fun, and factual clues that each connect "
-        f"that number to the domain. Each clue must begin with 'The number of'. "
+        f"that number to the domain. Do not include extra information or explanations."
+        f"Each clue must begin with 'The number of'. "
         f"The clues must be distinct — do not repeat the same fact. "
         f"Do not include the number itself anywhere in the clue, either as a digit or spelled out. "
         f"Output only a numbered list, one clue per line, with no extra explanation.\n"
@@ -64,7 +50,9 @@ def generate_clues(model, tokenizer, number, domain, num_clues):
         output = model.generate(
             **inputs,
             max_new_tokens=num_clues * 40,
-            do_sample=False,
+            do_sample=True,
+            temperature=0.8,
+            top_p=0.9,
             pad_token_id=tokenizer.eos_token_id,
         )
 
@@ -73,78 +61,72 @@ def generate_clues(model, tokenizer, number, domain, num_clues):
     return _parse_clues(raw, num_clues)
 
 
-def _parse_clues(text: str, num_clues: int) -> list[str]:
-    """Extract clues from a numbered list response."""
+def _parse_clues(raw_clues, num_clues):
+    """Parse the generated clues."""
     clues = []
-    for line in text.splitlines():
+    for line in raw_clues.splitlines():
         line = line.strip()
-        # Match lines like "1. The number of ..." or "1) The number of ..."
+        # look for strings of the form 1. CLUE. or 1) CLUE.
         match = re.match(r"^\d+[.)]\s*(.+)", line)
         if match:
+            # save only the clue, not the delimiting numbers
             clues.append(match.group(1).strip())
-    # Fall back: return non-empty lines if numbered parsing found nothing
+
+    # if no clues then split the raw clues, strip, and return them as-is
     if not clues:
-        clues = [l.strip() for l in text.splitlines() if l.strip()]
+        clues = [l.strip() for l in raw_clues.splitlines() if l.strip()]
     return clues[:num_clues]
 
-def find_best(model, tokenizer, clues, target_number):
-    """Verify clues by feeding them to the verifier model and select the best one.
 
-    Returns (clue, diff, confidence), or (None, None, None) if no valid clue found.
-    diff = target_number - guessed_number (0 means perfect match).
+def validate_clues(model, tokenizer, clues, target_number):
+    """Verify clues by feeding them to the verifier model.
 
-    Ranking: smallest |diff| first, then highest confidence as a tiebreaker.
+    Returns all valid clues, orderd by confidence in desc order.
     """
     valid = []
     for clue in clues:
-        if _reveals_answer(clue, target_number):
+        if reveals_answer(clue, target_number):
             continue
 
-        guessed, confidence = verify(model, tokenizer, clue)
-
+        guessed, top_prob, margin = verify(model, tokenizer, clue)
         if guessed is None:
             continue
 
         diff = target_number - guessed
 
-        # reject clues where the guess is too far off (>50% of target)
-        if abs(diff) / max(abs(target_number), 1) > 0.5:
+        if (top_prob < 0.5) or (margin < 0.6):
             continue
 
-        valid.append((clue, diff, confidence))
+        valid.append((clue, diff, margin))
 
-    if not valid:
-        return None, None, None
-
-    valid.sort(key=lambda x: (abs(x[1]), -x[2]))
-    return valid[0]
+    valid.sort(key=lambda x: -x[2])
+    return valid
 
 
 
 def main():
-    """
-    Here we generate clues for a number and domain. Basic steps:
-    1. Ask a model to generate a total of 'num_clues' clues based on a target number and domain
+    """Here we generate clues given a number and domain. Basic steps:
+    1. Ask a LLM to generate a total of 'num_clues' clues that relate the number and the domain
     2. Run the clues through a verifier: 
-       - Ask a small model to guess each clue.
-       - Return the verifier's guesses and teir confidence.
+       - Ask a small LLM to guess the number each clue is referring to.
+       - Return the verifier's guesses and their confidence.
     3. Select the best clue:
        - For each clue, we compare the guessed number to the target number.
-       - Ideally, the guessed number would be equal to the target number. Their diff=0.
-       - We sort first by the diff and then by the verifier's confidence. 
-       - Meaning, if multiple clues are a perfect match, keep the one with the highest confidence.
-       - Reject any clue where the difference between the guessed and target numbers is more than 50%.
+       - We keep clues with a confident guess.
+       - Then order clues according to confidence. The best clue is the most confident one.
     4. Apply a correction (if needed):
        - If the guessed number matches the target number, no correction needed.
        - If they differ by N, then we add a correction to the clue.
-         For example: "Add one" or "Subtract seven"
-    If no clues were accepted then it's better to try again with a different number or domain.
+    5. If for some reason very few clues were generated/accepted, then we force clues by using 
+       an alternative representation of the target number, like Roman numerals or Spanish. 
+       We can also use Fibonacci and prime ordinal numbers.
     """
     
-    parser = argparse.ArgumentParser(description="Generate a fun clue for a number and domain using Llama 3.2 3B.")
+    parser = argparse.ArgumentParser(description="Generate a fun clue for a number and domain.")
     parser.add_argument("--number", type=int, help="The target number.")
     parser.add_argument("--domain", type=str, help="The domain/category (e.g. sports, history, music).")
-    parser.add_argument("--num_clues", type=int, help="The number of clues to generate.", default=3)
+    parser.add_argument("--num_clues", type=int, help="The number of clues to generate.", default=5)
+    parser.add_argument("--output", type=str, default="clue_output.txt", help="Path to save the result (JSON for verbose, plain text otherwise).")
     parser.add_argument("-vo", "--verbose_output", action="store_true", help="Output everything. For debugging.")
     args = parser.parse_args()
 
@@ -157,7 +139,8 @@ def main():
     # 1. generate clues
     clues = generate_clues(g_model, g_tokenizer, args.number, args.domain, num_clues=args.num_clues)
     # 2. & 3. verify clues and select the best one
-    best_clue, diff, v_confidence = find_best(v_model, v_tokenizer, clues)
+    valid_clues = validate_clues(v_model, v_tokenizer, clues, args.number)
+    best_clue, diff, best_margin = valid_clues[0] if valid_clues else (None, None, None)
     # 4. apply a correction
     best_clue_corrected = None
     if best_clue and diff:
@@ -165,17 +148,28 @@ def main():
         best_clue_corrected = f"{best_clue} {correction}."
 
     if args.verbose_output:
-        output_dicc = {
+        result = {
             "target_num": args.number,
             "target_domain": args.domain,
-            "clues": clues,
+            "all_clues":  [{"clue": c, "diff": d, "margin": m} for c, d, m in valid_clues],
             "best_clue": best_clue,
             "best_clue_corrected": best_clue_corrected,
             "best_clue_diff": diff,
-            "best_clue_confidence": v_confidence
+            "best_clue_margin": best_margin,
         }
-        return output_dicc
-    return best_clue_corrected if best_clue_corrected else best_clue
+        output_text = json.dumps(result, indent=2)
+    else:
+        lines = [f"{c} | diff={d:+d} margin={m:.3f}" for c, d, m in valid_clues]
+        lines.append("")
+        lines.append(f"Best: {best_clue_corrected if best_clue_corrected else best_clue or 'No valid clue found.'}")
+        output_text = "\n".join(lines)
+
+    print(output_text)
+
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(output_text + "\n")
+        print(f"Saved to {args.output}")
 
 if __name__ == "__main__":
     main()
