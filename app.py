@@ -32,16 +32,17 @@ def _palette_json(hues):
 
 # Gradio's theme= only picks colors once, when this process starts (baked into
 # the CSS served to every visitor). To get a fresh random palette on every
-# individual page load, we re-roll client-side: this overrides the same
-# --primary-*/--secondary-*/--neutral-* CSS variables the theme defines, which
-# every derived Gradio color (buttons, backgrounds, etc.) references via
-# var(...), so the override cascades everywhere for free.
+# individual page load, we re-roll client-side.
 #
-# Gradio applies this head= script itself, client-side, via its own JS -- and
-# that same JS re-fetches and re-applies its own fixed, server-baked theme.css
-# right around the same time (and again later, e.g. on reconnect), which can
-# stomp a one-shot override. So instead of setting the palette once, we keep
-# reasserting the same random pick for a few seconds to reliably win.
+# Gradio's compiled theme.css defines --primary-*/--secondary-*/--neutral-*
+# twice: once under `:root` and again under `:root.dark, :root .dark` (its
+# dark-mode variant). Whichever element ends up carrying the .dark class
+# re-declares these variables closer to the actual components than an inline
+# override on <html> reaches -- inheritance doesn't care that our value has a
+# stronger origin, only that it's farther away -- so a plain inline override
+# loses for anything inside that subtree. Fix: inject a <style> block that
+# targets those exact same selectors with !important, so it wins the cascade
+# outright regardless of which element carries .dark or load order.
 _COLOR_HEAD = f"""
 <script>
 (function() {{
@@ -54,22 +55,15 @@ _COLOR_HEAD = f"""
     var secondary = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
     var neutral = NEUTRALS[Math.floor(Math.random() * NEUTRALS.length)];
 
-    function apply() {{
-        var root = document.documentElement.style;
-        SHADES.forEach(function(s) {{
-            root.setProperty('--primary-' + s, primary['c' + s]);
-            root.setProperty('--secondary-' + s, secondary['c' + s]);
-            root.setProperty('--neutral-' + s, neutral['c' + s]);
-        }});
-    }}
+    var decls = SHADES.map(function(s) {{
+        return '--primary-' + s + ': ' + primary['c' + s] + ' !important;'
+             + '--secondary-' + s + ': ' + secondary['c' + s] + ' !important;'
+             + '--neutral-' + s + ': ' + neutral['c' + s] + ' !important;';
+    }}).join('\\n');
 
-    apply();
-    var tries = 0;
-    var timer = setInterval(function() {{
-        apply();
-        tries += 1;
-        if (tries > 25) clearInterval(timer);  // ~5s at 200ms
-    }}, 200);
+    var style = document.createElement('style');
+    style.textContent = ':root, :root.dark, :root .dark, .dark {{\\n' + decls + '\\n}}';
+    document.head.appendChild(style);
 }})();
 </script>
 """
