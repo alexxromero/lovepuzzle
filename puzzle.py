@@ -119,6 +119,29 @@ def narrate_step(op, val, clue, correction):
     return f"{verb} {val}"
 
 
+def format_equation(equation_chain):
+    """Render an equation chain like [("seed", 123), ("+", 7), ...] as an
+    infix string, e.g. "((123 + 7) * 12) - 14".
+    """
+    seed_op, seed_val = equation_chain[0]
+    assert seed_op == "seed"
+    expr = str(seed_val)
+    for op, val in equation_chain[1:]:
+        if op == "+":
+            expr = f"({expr} + {val})"
+        elif op == "-":
+            expr = f"({expr} - {val})"
+        elif op == "*":
+            expr = f"({expr} * {val})"
+        elif op == "/":
+            expr = f"({expr} / {val})"
+        elif op in ("e2", "e3", "e4", "e5"):
+            expr = f"{expr}^{op[1:]}"
+        else:
+            raise ValueError(f"Unknown operator: {op}")
+    return expr
+
+
 def build_puzzle_text(seed, clues_info):
     """Returns the full narrated puzzle as a string."""
     lines = [f"1. Start with {seed}."]

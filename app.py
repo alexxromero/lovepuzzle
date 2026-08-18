@@ -5,7 +5,7 @@ import gradio as gr
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
-from puzzle import generate_puzzle, validate_phone_number
+from puzzle import generate_puzzle, validate_phone_number, format_equation
 
 # Color pools each page load randomly draws from. Boxes/panels and buttons
 # pick independently; input fields and borders are derived by lightening/
@@ -207,7 +207,7 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             gr.update(visible=True),                # show page 2
             gr.update(value="", visible=False),      # clear+hide error
             puzzle,
-            eq["infix"],
+            format_equation(eq),
             0,
             verify,
         )
