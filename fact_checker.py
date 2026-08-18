@@ -1,0 +1,117 @@
+import os
+import re
+
+import requests
+import torch
+
+SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
+SERPER_URL = "https://google.serper.dev/search"
+
+JUDGE_SYSTEM_PROMPT = (
+    "You are a fact-checking assistant. You will be given a factual claim and some "
+    "search result snippets. Based only on the snippets, state the number the claim "
+    "refers to. Respond with only the number, or UNKNOWN if the snippets don't say."
+)
+
+
+def _search(clue, timeout=8):
+    try:
+        resp = requests.post(
+            SERPER_URL,
+            headers={"X-API-KEY": SERPER_API_KEY, "Content-Type": "application/json"},
+            json={"q": clue},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException:
+        return None
+
+
+def _extract_number(answer_box):
+    """Pull the first integer out of a Serper answerBox, checking the fields
+    most likely to hold a direct numeric answer first."""
+    candidates = []
+    for key in ("answer", "snippet", "title"):
+        val = answer_box.get(key)
+        if val:
+            candidates.append(str(val))
+    for val in answer_box.get("snippetHighlighted") or []:
+        candidates.append(str(val))
+
+    for text in candidates:
+        match = re.search(r"-?\d[\d,]*", text)
+        if match:
+            return int(match.group().replace(",", ""))
+    return None
+
+
+def _extract_number_from_snippets(model, tokenizer, clue, snippets):
+    """Ask the verifier model what number the clue's claim refers to, based only
+    on search snippets.
+    """
+    snippet_text = "\n".join(f"- {s}" for s in snippets)
+    messages = [
+        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Claim: {clue}\nSearch snippets:\n{snippet_text}"},
+    ]
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        return_dict=True,
+    ).to(model.device)
+
+    with torch.no_grad():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=8,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+
+    generated_ids = output[0][inputs["input_ids"].shape[1]:]
+    raw = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    match = re.search(r"-?\d[\d,]*", raw)
+    return int(match.group().replace(",", "")) if match else None
+
+
+def fact_check(clue, v_model, v_tokenizer):
+    """Look up the clue's claim via search -- mimics what someone solving the
+    puzzle would actually do: google it.
+
+    Returns (verdict, number):
+      - ("disabled", None): SERPER_API_KEY isn't set, or the request itself
+        failed (network/API error) -- fact-checking didn't run at all, so the
+        caller should fall back to trusting the verifier's own guess
+      - ("conclusive", api_number): search found a number for the claim
+      - ("inconclusive", None): search ran but couldn't resolve to a number --
+        a real person googling this clue would be stuck too, so it's not a
+        good clue regardless of what the verifier guessed
+    """
+    if not SERPER_API_KEY:
+        return "disabled", None
+
+    try:
+        result = _search(clue.rstrip(". "))
+        if result is None:
+            return "disabled", None
+
+        api_number = None
+        answer_box = result.get("answerBox")
+        if answer_box:
+            api_number = _extract_number(answer_box)
+
+        if api_number is None:
+            organic = result.get("organic") or []
+            snippets = [o["snippet"] for o in organic[:5] if o.get("snippet")]
+            if snippets:
+                api_number = _extract_number_from_snippets(v_model, v_tokenizer, clue, snippets)
+
+        if api_number is None:
+            return "inconclusive", None
+        return "conclusive", api_number
+
+    except Exception as e:
+        print(f"Fact-check error for clue {clue!r}: {e}")
+        return "disabled", None

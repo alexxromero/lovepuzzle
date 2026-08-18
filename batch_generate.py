@@ -49,14 +49,14 @@ def main():
                     print("no valid clue")
                     continue
 
-                best_clue, diff, v_confidence = valid_clues[0]
+                best_clue, guessed, v_confidence = valid_clues[0]
+                diff = number - guessed
 
                 best_clue_corrected = ""
                 if diff:
                     hint = f"Plus {diff}" if diff > 0 else f"Minus {abs(diff)}"
                     best_clue_corrected = f"{best_clue} {hint}."
 
-                guessed = number - diff
                 writer.writerow([
                     number, domain, clues, best_clue_corrected, guessed, f"{v_confidence:.3f}"
                 ])

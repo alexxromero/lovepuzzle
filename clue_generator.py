@@ -12,11 +12,16 @@ MODEL_ID = "meta-llama/Llama-3.2-3B-Instruct"
 def _system_prompt(num_clues):
     return (
         f"You are a trivia expert. When given a number and a domain, you generate "
-        f"{num_clues} distinct, short (<20 words), fun, and factual clues that each connect "
-        f"that number to the domain. Do not include extra information or explanations."
-        f"Each clue must begin with 'The number of'. "
-        f"The clues must be distinct — do not repeat the same fact. "
-        f"Do not include the number itself anywhere in the clue, either as a digit or spelled out. "
+        f"{num_clues} distinct, short, fun, and factual clues that each connect "
+        f"that number to the domain.\n"
+        f"Each clue must be 'The number of' followed by only the noun phrase being counted, "
+        f"nothing else. Stop right after the noun phrase. Do not add a verb, a clause starting "
+        f"with 'is'/'are'/'that'/'which', or any explanation of why the fact is true.\n"
+        f"Good: 'The number of points on a Cartesian coordinate system.'\n"
+        f"Bad: 'The number of points on a Cartesian coordinate system is determined by its dimensions.'\n"
+        f"Keep each clue under 12 words.\n"
+        f"The clues must be distinct — do not repeat the same fact.\n"
+        f"Do not include the number itself anywhere in the clue, either as a digit or spelled out.\n"
         f"Output only a numbered list, one clue per line, with no extra explanation.\n"
         f"Example format:\n1. The number of ...\n2. The number of ..."
     )
@@ -92,12 +97,10 @@ def validate_clues(model, tokenizer, clues, target_number):
         if guessed is None:
             continue
 
-        diff = target_number - guessed
-
-        if (top_prob < 0.5) or (margin < 0.6):
+        if margin < 0.8:
             continue
 
-        valid.append((clue, diff, margin))
+        valid.append((clue, guessed, margin))
 
     valid.sort(key=lambda x: -x[2])
     return valid
@@ -140,7 +143,8 @@ def main():
     clues = generate_clues(g_model, g_tokenizer, args.number, args.domain, num_clues=args.num_clues)
     # 2. & 3. verify clues and select the best one
     valid_clues = validate_clues(v_model, v_tokenizer, clues, args.number)
-    best_clue, diff, best_margin = valid_clues[0] if valid_clues else (None, None, None)
+    best_clue, best_guess, best_margin = valid_clues[0] if valid_clues else (None, None, None)
+    diff = args.number - best_guess if best_guess is not None else None
     # 4. apply a correction
     best_clue_corrected = None
     if best_clue and diff:
@@ -151,7 +155,10 @@ def main():
         result = {
             "target_num": args.number,
             "target_domain": args.domain,
-            "all_clues":  [{"clue": c, "diff": d, "margin": m} for c, d, m in valid_clues],
+            "all_clues":  [
+                {"clue": c, "guess": g, "diff": args.number - g, "margin": m}
+                for c, g, m in valid_clues
+            ],
             "best_clue": best_clue,
             "best_clue_corrected": best_clue_corrected,
             "best_clue_diff": diff,
@@ -159,7 +166,10 @@ def main():
         }
         output_text = json.dumps(result, indent=2)
     else:
-        lines = [f"{c} | diff={d:+d} margin={m:.3f}" for c, d, m in valid_clues]
+        lines = [
+            f"{c} | guess={g} diff={args.number - g:+d} margin={m:.3f}"
+            for c, g, m in valid_clues
+        ]
         lines.append("")
         lines.append(f"Best: {best_clue_corrected if best_clue_corrected else best_clue or 'No valid clue found.'}")
         output_text = "\n".join(lines)

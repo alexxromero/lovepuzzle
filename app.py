@@ -5,7 +5,8 @@ import gradio as gr
 
 from clue_generator import load_model, MODEL_ID
 from verifier import load_verifier, VERIFIER_MODEL_ID
-from puzzle import generate_puzzle, validate_phone_number, format_equation
+from puzzle import generate_puzzle, validate_phone_number, format_equation, fact_check_summary
+from fact_checker import SERPER_API_KEY
 
 # Color pools each page load randomly draws from. Boxes/panels and buttons
 # pick independently; input fields and borders are derived by lightening/
@@ -173,6 +174,17 @@ g_model, g_tokenizer = None, None
 v_model, v_tokenizer = None, None
 
 
+def _fact_check_status(clues_info):
+    """Human-readable line showing whether/how much the search API contributed
+    to this puzzle's generated clues."""
+    if not SERPER_API_KEY:
+        return "🔍 Search fact-check: off (no API key configured)"
+    n_confirmed, n_generated = fact_check_summary(clues_info)
+    if n_generated == 0:
+        return "🔍 Search fact-check: on — no generated clues needed checking this time"
+    return f"🔍 Search fact-check: on — {n_confirmed}/{n_generated} generated clues confirmed via search"
+
+
 @spaces.GPU
 def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
     import traceback
@@ -182,15 +194,15 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
         domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
 
         if not phone_raw:
-            return gr.update(), gr.update(), gr.update(value="Please enter a phone number.", visible=True), "", "", 0, False
+            return gr.update(), gr.update(), gr.update(value="Please enter a phone number.", visible=True), "", "", 0, False, ""
         domains = [d for d in [domain1, domain2, domain3] if d]
         if len(domains) < 3:
-            return gr.update(), gr.update(), gr.update(value="Please enter all three interests.", visible=True), "", "", 0, False
+            return gr.update(), gr.update(), gr.update(value="Please enter all three interests.", visible=True), "", "", 0, False, ""
 
         try:
             phone = validate_phone_number(phone_raw)
         except ValueError as e:
-            return gr.update(), gr.update(), gr.update(value=f"Invalid phone number: {e}", visible=True), "", "", 0, False
+            return gr.update(), gr.update(), gr.update(value=f"Invalid phone number: {e}", visible=True), "", "", 0, False, ""
 
         if g_model is None:
             print(f"Loading generator ({MODEL_ID})...")
@@ -199,7 +211,7 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             print(f"Loading verifier ({VERIFIER_MODEL_ID})...")
             v_model, v_tokenizer = load_verifier()
 
-        eq, puzzle, _, _ = generate_puzzle(
+        eq, puzzle, clues_info, _ = generate_puzzle(
             phone, domains, g_model, g_tokenizer, v_model, v_tokenizer
         )
         return (
@@ -210,11 +222,12 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             format_equation(eq),
             0,
             verify,
+            _fact_check_status(clues_info),
         )
     except Exception as e:
         import traceback
         error_msg = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
-        return gr.update(), gr.update(), gr.update(value=error_msg, visible=True), "", "", 0, False
+        return gr.update(), gr.update(), gr.update(value=error_msg, visible=True), "", "", 0, False, ""
 
 
 def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
@@ -242,6 +255,7 @@ def start_over():
         gr.update(visible=False),              # hide page 2
         gr.update(value="", visible=False),    # clear+hide error
         "", "", 0, False,                      # reset state
+        "",                                    # clear fact-check status
     )
 
 
@@ -266,6 +280,7 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
     with gr.Column(visible=False) as page2:
         gr.Markdown("# 💌 Your Puzzle")
         puzzle_output = gr.Textbox(label="", lines=15, interactive=False, show_label=False)
+        fact_check_output = gr.Markdown("")
 
         with gr.Column(visible=False) as verify_section:
             gr.Markdown("### Think you know the number?")
@@ -280,15 +295,15 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
     # ── Wiring ───────────────────────────────────────────────────────────────
     def on_generate(phone_raw, d1, d2, d3, verify):
         result = run(phone_raw, d1, d2, d3, verify)
-        # result: (page1_update, page2_update, error, puzzle, equation, attempts, verify)
-        page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val = result
+        # result: (page1_update, page2_update, error, puzzle, equation, attempts, verify, fact_check_status)
+        page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val, fact_check_status = result
         verify_section_upd = gr.update(visible=verify_val)
-        return page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val, verify_section_upd
+        return page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val, verify_section_upd, fact_check_status
 
     generate_btn.click(
         fn=on_generate,
         inputs=[phone_input, d1, d2, d3, verify_checkbox],
-        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state, verify_section],
+        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state, verify_section, fact_check_output],
     )
 
     check_btn.click(
@@ -306,7 +321,7 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
     back_btn.click(
         fn=start_over,
         inputs=[],
-        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state],
+        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state, fact_check_output],
     )
 
 demo.launch()

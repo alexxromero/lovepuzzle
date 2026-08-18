@@ -10,6 +10,7 @@ from alternative_representations import (
     roman_clue, binary_clue, prime_ordinal_clue,
     fibonacci_ordinal_clue, spanish_clue,
 )
+from fact_checker import fact_check
 
 N_CLUES = 5  # number of clues to ask the generator LLM for
 MAX_RETRIES = 3  # number of tries for the whole puzzle generation
@@ -146,7 +147,7 @@ def build_puzzle_text(seed, clues_info):
     """Returns the full narrated puzzle as a string."""
     lines = [f"1. Start with {seed}."]
     i = 2
-    for (op, val, clue, correction, _, _) in clues_info:
+    for (op, val, clue, correction, _, _, _) in clues_info:
         lines.append(f"{i}. {narrate_step(op, val, clue, correction)}")
         i += 1
     return "\n".join(lines)
@@ -162,33 +163,48 @@ def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tok
 
     registry = ClueRegistry()  # track clues to avoid duplicates
 
-    clues_info = []  #(operator, value, best clue, correction, domain, clue source)
+    clues_info = []  #(operator, value, best clue, correction, domain, clue source, fact_checked)
 
     # First pass: LMM clue generator
     for op, val in equation_chain[1:]:
         if op in ('e2', 'e3', 'e4', 'e5') or not (val in PREF_INTS or val < 100):
             # no clue generation
-            clues_info.append((op, val, None, None, None, None))
+            clues_info.append((op, val, None, None, None, None, None))
             continue
 
         domain = random.choice(domains)
         candidates = generate_clues(g_model, g_tokenizer, val, domain, N_CLUES)
+        # validate_clues return the clues that passed the verifier's
+        # confidence check, ordered by highest confidence
         valid_clues = validate_clues(v_model, v_tokenizer, candidates, val)
-        best_clue, best_clue_diff = None, None
-        for clue, diff, _ in valid_clues:
+        best_clue, best_clue_diff, fact_checked = None, None, None
+        for clue, guess, _ in valid_clues:
             if registry.is_duplicate(clue):
                 continue
+
+            # last check: use a search API to guess the clue. This mimics what
+            # a user is likely to do -- search the clues on google. If the search
+            # ran but came up empty, a real solver would be stuck too, so we
+            # discard the clue. If fact-checking is off (no key configured, or
+            # the request itself failed), fall back on the verifier's own guess.
+            veredict, api_number = fact_check(clue, v_model, v_tokenizer)
+            if veredict == "inconclusive":
+                continue
+            if veredict == "conclusive":
+                guess = api_number
+
             best_clue = clue
-            best_clue_diff = diff
+            best_clue_diff = val - guess
+            fact_checked = (veredict == "conclusive")
             registry.register(clue)
             break
 
         source = CLUE_SOURCE_GENERATED if best_clue is not None else None
-        clues_info.append((op, val, best_clue, best_clue_diff, domain, source))
-        
+        clues_info.append((op, val, best_clue, best_clue_diff, domain, source, fact_checked))
+
     # Second pass: for values without a clue, look up if there are any hard-coded clues
     # that we can use
-    for i, (op, val, clue_text, _, domain, _) in enumerate(clues_info):
+    for i, (op, val, clue_text, _, domain, _, _) in enumerate(clues_info):
         if clue_text is not None:  # already has a clue
             continue
         if domain is None:  # likely not a fact-rich number
@@ -196,7 +212,7 @@ def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tok
         hardcoded, diff = get_hardcoded_clue(val, domain)
         if hardcoded and not registry.is_duplicate(hardcoded):
             registry.register(hardcoded)
-            clues_info[i] = (op, val, hardcoded, diff, "misc", CLUE_SOURCE_HARDCODED)
+            clues_info[i] = (op, val, hardcoded, diff, "misc", CLUE_SOURCE_HARDCODED, None)
 
     # Third pass: try alternative representations.
     # Each representation type may appear at most once per puzzle.
@@ -208,7 +224,7 @@ def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tok
         ("spanish_rep", spanish_clue),
         ("binary_rep", binary_clue),
     ]
-    for i, (op, val, clue_text, _, domain, _) in enumerate(clues_info):
+    for i, (op, val, clue_text, _, domain, _, _) in enumerate(clues_info):
         if clue_text is not None or val is None:
             continue
 
@@ -224,11 +240,20 @@ def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tok
         if clue is not None and not registry.is_duplicate(clue):
             registry.register(clue)
             used_reps.add(rep_name)
-            clues_info[i] = (op, val, clue, None, rep_name, CLUE_SOURCE_ALTERNATIVE)
+            clues_info[i] = (op, val, clue, None, rep_name, CLUE_SOURCE_ALTERNATIVE, None)
 
-    n_valid = sum(1 for _, _, clue, _, _, _ in clues_info if clue is not None)
+    n_valid = sum(1 for _, _, clue, _, _, _, _ in clues_info if clue is not None)
     puzzle = build_puzzle_text(seed_val, clues_info)
     return equation_chain, puzzle, n_valid, clues_info
+
+
+def fact_check_summary(clues_info):
+    """How many of this puzzle's LLM-generated clues were confirmed via the
+    search API. Returns (n_confirmed, n_generated).
+    """
+    n_generated = sum(1 for (*_, source, _) in clues_info if source == CLUE_SOURCE_GENERATED)
+    n_confirmed = sum(1 for (*_, fact_checked) in clues_info if fact_checked)
+    return n_confirmed, n_generated
 
 
 def generate_puzzle(phone_num, domains, g_model, g_tokenizer, v_model, v_tokenizer):
@@ -239,9 +264,11 @@ def generate_puzzle(phone_num, domains, g_model, g_tokenizer, v_model, v_tokeniz
             phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tokenizer
         )
         if n_valid > 0:
+            n_fact_checked, n_generated = fact_check_summary(clues_info)
             print(f"\nEquation : {eq}\n")
             print(puzzle)
-            step_domains = [domain for (_, _, _, _, domain, _) in clues_info]
+            print(f"\nFact-checked: {n_fact_checked}/{n_generated} generated clues confirmed via search API")
+            step_domains = [domain for (_, _, _, _, domain, _, _) in clues_info]
             return eq, puzzle, clues_info, step_domains
         print(f"Attempt {attempt + 1}: no valid clues found, retrying...")
 

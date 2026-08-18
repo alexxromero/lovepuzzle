@@ -11,4 +11,5 @@ dependencies = [
     "transformers>=5.8.1",
     "sentence-transformers>=3.0.0",
     "gradio>=6.17.3",
+    "requests>=2.32.0",
 ]
