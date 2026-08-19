@@ -301,7 +301,7 @@ def _request_origin(request: gr.Request):
 
 
 @spaces.GPU
-def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
+def run(phone_raw: str, domain1: str, domain2: str, domain3: str):
     import traceback
     global g_model, g_tokenizer, v_model, v_tokenizer
     try:
@@ -309,15 +309,15 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
         domain1, domain2, domain3 = domain1.strip(), domain2.strip(), domain3.strip()
 
         if not phone_raw:
-            return gr.update(), gr.update(), gr.update(value="Please enter a phone number.", visible=True), "", "", 0, False, ""
+            return gr.update(), gr.update(), gr.update(value="Please enter a phone number.", visible=True), "", "", 0, ""
         domains = [d for d in [domain1, domain2, domain3] if d]
         if len(domains) < 3:
-            return gr.update(), gr.update(), gr.update(value="Please enter all three interests.", visible=True), "", "", 0, False, ""
+            return gr.update(), gr.update(), gr.update(value="Please enter all three interests.", visible=True), "", "", 0, ""
 
         try:
             phone = validate_phone_number(phone_raw)
         except ValueError as e:
-            return gr.update(), gr.update(), gr.update(value=f"Invalid phone number: {e}", visible=True), "", "", 0, False, ""
+            return gr.update(), gr.update(), gr.update(value=f"Invalid phone number: {e}", visible=True), "", "", 0, ""
 
         if g_model is None:
             print(f"Loading generator ({MODEL_ID})...")
@@ -336,13 +336,12 @@ def run(phone_raw: str, domain1: str, domain2: str, domain3: str, verify: bool):
             puzzle,
             format_equation(eq),
             0,
-            verify,
             _fact_check_status(clues_info),
         )
     except Exception as e:
         import traceback
         error_msg = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
-        return gr.update(), gr.update(), gr.update(value=error_msg, visible=True), "", "", 0, False, ""
+        return gr.update(), gr.update(), gr.update(value=error_msg, visible=True), "", "", 0, ""
 
 
 def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
@@ -350,18 +349,15 @@ def check_answer(guess: str, phone_raw: str, attempts: int, equation: str):
         phone = validate_phone_number(phone_raw.strip())
         guess_digits = guess.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
         if str(phone) == guess_digits:
-            return "Correct! 🎉", attempts, gr.update(visible=False)
+            return "Correct! 🎉", attempts, ""
         else:
             new_attempts = attempts + 1
             msg = f"Wrong! ({new_attempts}/3 attempts used)"
-            reveal_visible = new_attempts >= 3
-            return msg, new_attempts, gr.update(visible=reveal_visible)
+            # Show the equation only -- never the target number itself.
+            equation_upd = f"Equation: {equation}" if new_attempts >= 3 else ""
+            return msg, new_attempts, equation_upd
     except Exception as e:
-        return f"Error: {e}", attempts, gr.update(visible=False)
-
-
-def reveal(equation: str):
-    return gr.update(value=f"Equation: {equation}", visible=True)
+        return f"Error: {e}", attempts, ""
 
 
 def start_over():
@@ -369,9 +365,10 @@ def start_over():
         gr.update(visible=True),               # show page 1
         gr.update(visible=False),              # hide page 2
         gr.update(value="", visible=False),    # clear+hide error
-        "", "", 0, False,                      # reset state
+        "", "", 0,                             # reset state
         "",                                    # clear fact-check status
         gr.update(value="", visible=False),    # clear+hide share link
+        "",                                    # clear revealed equation
     )
 
 
@@ -390,18 +387,15 @@ def on_page_load(request: gr.Request):
                 equation_str,                  # equation_state
                 str(phone),                    # phone_input (used by check_answer)
                 0,                             # attempts_state
-                True,                          # verify_state
-                gr.update(visible=True),       # verify_section -- the whole point of the link
             )
         except ValueError:
             pass  # malformed token -- fall through to the normal page 1 view
-    return gr.update(), gr.update(), "", "", "", 0, False, gr.update(visible=False)
+    return gr.update(), gr.update(), "", "", "", 0
 
 
 with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
     equation_state = gr.State("")
     attempts_state = gr.State(0)
-    verify_state = gr.State(False)
 
     # ── Page 1 ──────────────────────────────────────────────────────────────
     with gr.Column(visible=True) as page1:
@@ -411,7 +405,6 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
             d1 = gr.Textbox(label="Interest 1", placeholder="e.g. sports")
             d2 = gr.Textbox(label="Interest 2", placeholder="e.g. history")
             d3 = gr.Textbox(label="Interest 3", placeholder="e.g. music")
-        verify_checkbox = gr.Checkbox(label="Enable answer verification on next page")
         error_output = gr.Textbox(label="", interactive=False, visible=False, show_label=False)
         generate_btn = gr.Button("Generate Puzzle ➜", variant="primary")
 
@@ -422,22 +415,19 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
         share_url_output = gr.Textbox(label="Share this puzzle", interactive=False, visible=False)
         fact_check_output = gr.Markdown("", container=True)
 
-        with gr.Column(visible=False) as verify_section:
-            gr.Markdown("### Think you know the number?")
-            guess_input = gr.Textbox(label="Enter the phone number", placeholder="e.g. (555) 867-5309")
-            check_btn = gr.Button("Check Answer", variant="primary")
-            result_output = gr.Textbox(label="", interactive=False, show_label=False)
-            reveal_btn = gr.Button("Reveal Equation", variant="secondary", visible=False)
-            equation_output = gr.Textbox(label="", interactive=False, show_label=False, visible=False)
+        gr.Markdown("### Think you know the number?")
+        guess_input = gr.Textbox(label="Enter the phone number", placeholder="e.g. (555) 867-5309")
+        check_btn = gr.Button("Check Answer", variant="primary")
+        result_output = gr.Textbox(label="", interactive=False, show_label=False)
+        equation_output = gr.Markdown("", container=True)
 
         back_btn = gr.Button("← Start Over", variant="secondary")
 
     # ── Wiring ───────────────────────────────────────────────────────────────
-    def on_generate(phone_raw, d1, d2, d3, verify, request: gr.Request):
-        result = run(phone_raw, d1, d2, d3, verify)
-        # result: (page1_update, page2_update, error, puzzle, equation, attempts, verify, fact_check_status)
-        page1_upd, page2_upd, error, puzzle, equation, attempts, verify_val, fact_check_status = result
-        verify_section_upd = gr.update(visible=verify_val)
+    def on_generate(phone_raw, d1, d2, d3, request: gr.Request):
+        result = run(phone_raw, d1, d2, d3)
+        # result: (page1_update, page2_update, error, puzzle, equation, attempts, fact_check_status)
+        page1_upd, page2_upd, error, puzzle, equation, attempts, fact_check_status = result
 
         share_url_upd = gr.update(value="", visible=False)
         if puzzle:
@@ -452,37 +442,31 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
 
         return (
             page1_upd, page2_upd, error, puzzle, equation, attempts,
-            verify_val, verify_section_upd, fact_check_status, share_url_upd,
+            fact_check_status, share_url_upd, "",
         )
 
     generate_btn.click(
         fn=on_generate,
-        inputs=[phone_input, d1, d2, d3, verify_checkbox],
-        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state, verify_section, fact_check_output, share_url_output],
+        inputs=[phone_input, d1, d2, d3],
+        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, fact_check_output, share_url_output, equation_output],
     )
 
     check_btn.click(
         fn=check_answer,
         inputs=[guess_input, phone_input, attempts_state, equation_state],
-        outputs=[result_output, attempts_state, reveal_btn],
-    )
-
-    reveal_btn.click(
-        fn=reveal,
-        inputs=[equation_state],
-        outputs=[equation_output],
+        outputs=[result_output, attempts_state, equation_output],
     )
 
     back_btn.click(
         fn=start_over,
         inputs=[],
-        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, verify_state, fact_check_output, share_url_output],
+        outputs=[page1, page2, error_output, puzzle_output, equation_state, attempts_state, fact_check_output, share_url_output, equation_output],
     )
 
     demo.load(
         fn=on_page_load,
         inputs=None,
-        outputs=[page1, page2, puzzle_output, equation_state, phone_input, attempts_state, verify_state, verify_section],
+        outputs=[page1, page2, puzzle_output, equation_state, phone_input, attempts_state],
     )
 
 demo.launch()
