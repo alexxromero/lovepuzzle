@@ -151,7 +151,12 @@ _COLOR_HEAD = f"""
         '--button-secondary-text-color': TEXT_COLOR,
     }};
     var decls = Object.keys(vars).map(function(k) {{ return k + ': ' + vars[k] + ' !important;'; }}).join('\\n');
-    var css = ':root, :root.dark, :root .dark, .dark {{\\n' + decls + '\\n}}';
+    // The deployed Gradio version (5.0.0) never wires up --body-background-fill
+    // to any real element -- that only landed in a later Gradio release, which
+    // makes the variable inert here. Paint body/html directly instead of
+    // relying on Gradio's own (missing, in this version) consuming CSS rule.
+    var css = ':root, :root.dark, :root .dark, .dark {{\\n' + decls + '\\n}}'
+        + '\\nhtml, body {{ background: ' + bg + ' !important; color: ' + TEXT_COLOR + ' !important; }}';
 
     var style = null;
     function apply() {{

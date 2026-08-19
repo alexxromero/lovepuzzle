@@ -97,7 +97,7 @@ def validate_clues(model, tokenizer, clues, target_number):
         if guessed is None:
             continue
 
-        if margin < 0.8:
+        if margin < 0.95:
             continue
 
         valid.append((clue, guessed, margin))

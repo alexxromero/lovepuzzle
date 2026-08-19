@@ -174,7 +174,7 @@ def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tok
 
         domain = random.choice(domains)
         candidates = generate_clues(g_model, g_tokenizer, val, domain, N_CLUES)
-        # validate_clues return the clues that passed the verifier's
+        # validate_clues returns the clues that passed the verifier's
         # confidence check, ordered by highest confidence
         valid_clues = validate_clues(v_model, v_tokenizer, candidates, val)
         best_clue, best_clue_diff, fact_checked = None, None, None
@@ -184,7 +184,7 @@ def _build_puzzle(phone_num, domains, seed, g_model, g_tokenizer, v_model, v_tok
 
             # last check: use a search API to guess the clue. This mimics what
             # a user is likely to do -- search the clues on google. If the search
-            # ran but came up empty, a real solver would be stuck too, so we
+            # ran but came up empty, a user would likely be stuck too, so we
             # discard the clue. If fact-checking is off (no key configured, or
             # the request itself failed), fall back on the verifier's own guess.
             veredict, api_number = fact_check(clue, v_model, v_tokenizer)
