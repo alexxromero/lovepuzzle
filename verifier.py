@@ -25,7 +25,7 @@ def _parse_number(text):
     match = re.search(r"-?\d+", text)
     return int(match.group()) if match else None
 
-def _first_token_stats(scores):
+def first_token_stats(scores):
     """Return (top_prob, margin) for the first generated token."""
     if not scores:
         return 0.0, 0.0
@@ -63,7 +63,7 @@ def verify(model, tokenizer, clue):
     generated_ids = output.sequences[0][inputs["input_ids"].shape[1]:]
     raw = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
     guessed = _parse_number(raw)
-    top_prob, margin = _first_token_stats(output.scores)
+    top_prob, margin = first_token_stats(output.scores)
     return guessed, top_prob, margin
 
 

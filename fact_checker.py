@@ -4,8 +4,16 @@ import re
 import requests
 import torch
 
+from verifier import first_token_stats
+
 SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
 SERPER_URL = "https://google.serper.dev/search"
+
+# The judge has no ground truth to check itself against -- unlike the verifier,
+# which only needs to be the most confident among ranked candidates, a wrong
+# judge answer here can override a correct one. Require a very high margin
+# before trusting its extracted number at all.
+JUDGE_MARGIN_THRESHOLD = 0.9
 
 JUDGE_SYSTEM_PROMPT = (
     "You are a fact-checking assistant. You will be given a factual claim and some "
@@ -48,7 +56,8 @@ def _extract_number(answer_box):
 
 def _extract_number_from_snippets(model, tokenizer, clue, snippets):
     """Ask the verifier model what number the clue's claim refers to, based only
-    on search snippets.
+    on search snippets. Only returns a number if the model's first-token margin
+    clears JUDGE_MARGIN_THRESHOLD -- otherwise None, same as not finding one.
     """
     snippet_text = "\n".join(f"- {s}" for s in snippets)
     messages = [
@@ -68,10 +77,16 @@ def _extract_number_from_snippets(model, tokenizer, clue, snippets):
             max_new_tokens=8,
             do_sample=False,
             pad_token_id=tokenizer.eos_token_id,
+            return_dict_in_generate=True,
+            output_scores=True,
         )
 
-    generated_ids = output[0][inputs["input_ids"].shape[1]:]
+    generated_ids = output.sequences[0][inputs["input_ids"].shape[1]:]
     raw = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    _, margin = first_token_stats(output.scores)
+    if margin < JUDGE_MARGIN_THRESHOLD:
+        return None
+
     match = re.search(r"-?\d[\d,]*", raw)
     return int(match.group().replace(",", "")) if match else None
 

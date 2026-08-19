@@ -280,7 +280,7 @@ with gr.Blocks(title="Love Puzzle", theme=_theme, head=_COLOR_HEAD) as demo:
     with gr.Column(visible=False) as page2:
         gr.Markdown("# 💌 Your Puzzle")
         puzzle_output = gr.Textbox(label="", lines=15, interactive=False, show_label=False)
-        fact_check_output = gr.Markdown("")
+        fact_check_output = gr.Markdown("", container=True)
 
         with gr.Column(visible=False) as verify_section:
             gr.Markdown("### Think you know the number?")
