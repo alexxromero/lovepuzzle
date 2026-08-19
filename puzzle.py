@@ -1,5 +1,7 @@
 import re
 import random
+import json
+import base64
 import phonenumbers
 
 from equation_maker import EquationGenerator, PREF_INTS
@@ -141,6 +143,30 @@ def format_equation(equation_chain):
         else:
             raise ValueError(f"Unknown operator: {op}")
     return expr
+
+
+def encode_puzzle(puzzle_text, phone, equation_str):
+    """Pack a generated puzzle into a URL-safe token so it can be shared as a
+    link -- solving/checking a shared puzzle needs none of the generator/
+    verifier models, just this data. Not encryption: anyone who decodes the
+    token can read the target phone number directly.
+    """
+    payload = {"p": puzzle_text, "n": phone, "e": equation_str}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_puzzle(token):
+    """Inverse of encode_puzzle. Returns (puzzle_text, phone, equation_str).
+    Raises ValueError on a malformed/tampered token.
+    """
+    try:
+        padded = token + "=" * (-len(token) % 4)
+        raw = base64.urlsafe_b64decode(padded)
+        payload = json.loads(raw.decode("utf-8"))
+        return payload["p"], payload["n"], payload["e"]
+    except Exception as e:
+        raise ValueError(f"Malformed puzzle token: {e}")
 
 
 def build_puzzle_text(seed, clues_info):
