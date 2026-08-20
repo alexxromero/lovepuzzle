@@ -10,7 +10,7 @@ SERPER_API_KEY = os.environ.get("SERPER_API_KEY")
 SERPER_URL = "https://google.serper.dev/search"
 
 
-EXTRACT_MARGIN_THRESHOLD = 0.95
+EXTRACT_MARGIN_THRESHOLD = 0.65
 
 EXTRACT_SYSTEM_PROMPT = (
     "You are a fact-checking assistant. You will be given a factual claim and some "

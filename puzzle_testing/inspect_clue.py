@@ -65,7 +65,7 @@ def inspect_clue(clue, v_model, v_tokenizer):
     print("\n--- Verifier's own guess (same call validate_clues() makes) ---")
     print(f"  guess            : {guessed}")
     print(f"  top-token prob   : {top_prob:.4f}")
-    print(f"  confidence margin: {margin:.4f}  (validate_clues() threshold: 0.95)")
+    print(f"  confidence margin: {margin:.4f}  (validate_clues() threshold: 0.65)")
 
     query = clue.rstrip(". ")
     print(f'\nSearch query: "{query}"')
